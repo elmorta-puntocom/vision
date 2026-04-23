@@ -1,4 +1,3 @@
-.venv
 captures
 drowsy_cnn_model.keras
 scaler.save
