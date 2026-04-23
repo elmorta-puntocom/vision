@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Vision — Detección de Somnolencia{% endblock %}</title>
+    <style>
+        :root {
+            --bg: #050a0e;
+            --surface: #0a1520;
+            --surface2: #0f1d2d;
+            --border: #1a2d40;
+            --accent: #00e5ff;
+            --text: #e8f4f8;
+            --text-mid: #8faab8;
+            --text-muted: #4a6a7a;
+            --success: #00e676;
+            --danger: #ff3c3c;
+            --warning: #ff9800;
+            --font-mono: 'Courier New', Courier, monospace;
+            --radius: 0;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Georgia', 'Times New Roman', serif;
+            font-size: 16px;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        /* Flash messages */
+        .flashes {
+            position: fixed;
+            top: 4.5rem;
+            right: 1.5rem;
+            z-index: 999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-width: 360px;
+        }
+        .flash {
+            padding: 0.85rem 1.25rem;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            letter-spacing: 0.05em;
+            border-left: 3px solid;
+            animation: slideIn 0.2s ease;
+        }
+        @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+        .flash-success { background: #001a0a; border-color: var(--success); color: var(--success); }
+        .flash-danger  { background: #1a0005; border-color: var(--danger);  color: var(--danger);  }
+        .flash-info    { background: #001520; border-color: var(--accent);  color: var(--accent);  }
+        .flash-warning { background: #1a0e00; border-color: var(--warning); color: var(--warning); }
+
+        /* Nav */
+        nav {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(5,10,14,0.95);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--border);
+            padding: 0 5rem;
+            height: 4rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .nav-logo {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            font-weight: 700;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: var(--accent);
+            text-decoration: none;
+        }
+        .nav-logo span { color: var(--text-muted); }
+        .nav-links { display: flex; align-items: center; gap: 2rem; }
+        .nav-links a {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .nav-links a:hover { color: var(--accent); }
+        .nav-links .nav-cta {
+            padding: 0.4rem 1.25rem;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+        }
+        .nav-links .nav-cta:hover { background: rgba(0,229,255,0.08); }
+
+        /* Tag (used in sections) */
+        .tag {
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: var(--accent);
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--border); }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+    </style>
+    {% block extra_styles %}{% endblock %}
+</head>
+<body>
+
+<nav>
+    <a href="{{ url_for('index') }}" class="nav-logo">Vision<span>//</span></a>
+    <div class="nav-links">
+        {% if current_user.is_authenticated %}
+            <a href="{{ url_for('dashboard') }}">Dashboard</a>
+            <a href="{{ url_for('logout') }}">Cerrar sesión</a>
+        {% else %}
+            <a href="{{ url_for('index') }}#producto">Producto</a>
+            <a href="{{ url_for('index') }}#tecnologia">Tecnología</a>
+            <a href="{{ url_for('login') }}">Iniciar sesión</a>
+            <a href="{{ url_for('register') }}" class="nav-cta">Registrarse</a>
+        {% endif %}
+    </div>
+</nav>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flashes">
+        {% for cat, msg in messages %}
+        <div class="flash flash-{{ cat }}">{{ msg }}</div>
+        {% endfor %}
+    </div>
+    <script>
+        setTimeout(() => {
+            document.querySelectorAll('.flash').forEach(el => {
+                el.style.transition = 'opacity 0.4s';
+                el.style.opacity = '0';
+                setTimeout(() => el.remove(), 400);
+            });
+        }, 4000);
+    </script>
+    {% endif %}
+{% endwith %}
+
+{% block content %}{% endblock %}
+
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>
