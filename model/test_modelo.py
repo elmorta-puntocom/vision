@@ -1,74 +1,123 @@
+"""Manual webcam test that reuses the production realtime detector logic."""
+
+from pathlib import Path
+import sys
+
 import cv2
 import mediapipe as mp
-import numpy as np
-import tensorflow as tf
-import joblib
-import sys
-import os
+import time
 
-# Ajustar paths según desde donde lo corrás
-sys.path.insert(0, os.path.dirname(__file__))
-from data_collection import normalize_landmarks
 
-model  = tf.keras.models.load_model("drowsy_cnn_model.keras")
-scaler = joblib.load("scaler.save")
+BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
 
-UMBRAL_FRAMES = 20
-contador = 0
-prob = 0.5
+from deteccion_tiempo_real import (  # noqa: E402
+    LABEL_DESPIERTO,
+    PredictionSmoother,
+    EyeClosureTracker,
+    calculate_eye_aspect_ratio,
+    combine_signals,
+    empty_probabilities,
+    estimate_head_pitch,
+    extract_landmarks,
+    infer_state,
+    load_runtime_assets,
+    preprocess_landmarks,
+    render_status,
+)
 
-cap = cv2.VideoCapture(0)
-mp_holistic = mp.solutions.holistic
 
-with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+def main():
+    model, scaler, expected_features, interpreter = load_runtime_assets()
+    smoother = PredictionSmoother()
+    eye_tracker = EyeClosureTracker()
 
-        frame = cv2.flip(frame, 1)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb.flags.writeable = False
-        res = holistic.process(rgb)
-        rgb.flags.writeable = True
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        raise RuntimeError("No se pudo abrir la camara.")
 
-        somnoliento = False
+    mp_holistic = mp.solutions.holistic
+    with mp_holistic.Holistic(
+        static_image_mode=False,
+        model_complexity=1,
+        enable_segmentation=False,
+        refine_face_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    ) as holistic:
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                break
 
-        if res.face_landmarks and res.pose_landmarks:
-            try:
-                vals = normalize_landmarks(res.face_landmarks, res.pose_landmarks)
-                X = np.array(vals).reshape(1, -1).astype("float32")
-                X = scaler.transform(X)
-                X = X.reshape((1, X.shape[1], 1))
-                prob = model.predict(X, verbose=0)[0][0]
-                somnoliento = prob < 0.5  # 0 = dormido, 1 = despierto
+            frame = cv2.flip(frame, 1)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb.flags.writeable = False
+            results = holistic.process(rgb)
+            rgb.flags.writeable = True
 
-                if somnoliento:
-                    contador += 1
+            now = time.monotonic()
+            face_detected = results.face_landmarks is not None
+            ear_result = calculate_eye_aspect_ratio(results.face_landmarks) if face_detected else None
+            eye_evidence = eye_tracker.update(ear_result, now) if face_detected else eye_tracker.update(None, now)
+            head_pitch = estimate_head_pitch(results.face_landmarks, frame.shape) if face_detected else None
+
+            if not face_detected:
+                smoother.clear()
+                render_status(
+                    frame,
+                    "No hay rostro",
+                    probabilities=empty_probabilities(),
+                    eye_evidence=eye_evidence,
+                    head_pitch=head_pitch,
+                    model_available=False,
+                )
+            else:
+                values = extract_landmarks(results)
+                if values is None:
+                    smoother.clear()
+                    decision = combine_signals(
+                        LABEL_DESPIERTO,
+                        0.0,
+                        empty_probabilities(),
+                        eye_evidence,
+                    )
+                    render_status(
+                        frame,
+                        decision.state,
+                        decision.confidence,
+                        empty_probabilities(),
+                        eye_evidence,
+                        head_pitch,
+                        model_available=False,
+                    )
                 else:
-                    contador = 0
-            except Exception as e:
-                print("Error:", e)
+                    model_input = preprocess_landmarks(values, scaler, model, expected_features)
+                    _, _, probabilities, _ = infer_state(model, model_input, interpreter)
+                    smooth_label, smooth_confidence, smooth_probabilities = smoother.update(probabilities)
+                    decision = combine_signals(
+                        smooth_label,
+                        smooth_confidence,
+                        smooth_probabilities,
+                        eye_evidence,
+                    )
+                    render_status(
+                        frame,
+                        decision.state,
+                        decision.confidence,
+                        smooth_probabilities,
+                        eye_evidence,
+                        head_pitch,
+                        model_available=True,
+                    )
 
-        # Texto principal
-        if not res.face_landmarks:
-            estado = "SIN ROSTRO"
-            color  = (128, 128, 128)
-        elif somnoliento and contador >= UMBRAL_FRAMES:
-            estado = "DORMIDO"
-            color  = (0, 0, 255)
-        else:
-            estado = "DESPIERTO"
-            color  = (0, 255, 0)
+            cv2.imshow("Vision - Test hibrido", frame)
+            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                break
 
-        cv2.putText(frame, estado, (30, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.8, color, 3)
-        cv2.putText(frame, f"prob: {prob:.2f}  frames: {contador}", (30, 110),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    cap.release()
+    cv2.destroyAllWindows()
 
-        cv2.imshow("Vision — Test", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
 
-cap.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    main()

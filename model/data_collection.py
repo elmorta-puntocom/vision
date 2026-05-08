@@ -19,6 +19,11 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
+try:
+    from biometrics import calculate_eye_aspect_ratio
+except ImportError:  # Allows importing as model.data_collection from the app root.
+    from model.biometrics import calculate_eye_aspect_ratio
+
 
 CSV_FILE = "landmarks.csv"
 SHOW_POSE = True
@@ -126,6 +131,7 @@ def main():
 
             adjusted = adjust_brightness(frame, target_brightness=130)
             annotated = adjusted.copy()
+            ear_result = calculate_eye_aspect_ratio(results.face_landmarks)
 
             if SHOW_FACE and results.face_landmarks:
                 mp_drawing.draw_landmarks(
@@ -133,7 +139,7 @@ def main():
                     results.face_landmarks,
                     mp.solutions.face_mesh.FACEMESH_TESSELATION,
                     mp_drawing.DrawingSpec(color=(80, 110, 10), thickness=1, circle_radius=1),
-                    mp_drawing.DrawingSpec(color=(80, 256, 121), thickness=1),
+                    mp_drawing.DrawingSpec(color=(80, 255, 121), thickness=1),
                 )
 
             if SHOW_POSE and results.pose_landmarks:
@@ -147,6 +153,16 @@ def main():
                 annotated,
                 "Press 0=drowsy, 1=not drowsy, q=quit",
                 (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+            )
+            ear_text = "EAR: N/A" if ear_result is None else f"EAR: {ear_result.average:.3f}"
+            cv2.putText(
+                annotated,
+                ear_text,
+                (10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (255, 255, 255),
@@ -180,7 +196,8 @@ def main():
                 writer.writerow(row)
 
             frame_id += 1
-            print(f"Logged sample label={label}")
+            logged_ear = "N/A" if ear_result is None else f"{ear_result.average:.3f}"
+            print(f"Logged sample label={label} ear={logged_ear}")
 
     cap.release()
     cv2.destroyAllWindows()

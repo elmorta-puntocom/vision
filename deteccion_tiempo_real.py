@@ -1,6 +1,8 @@
 from collections import Counter, deque
+from dataclasses import dataclass
 from pathlib import Path
 import sys
+import time
 
 import cv2
 import joblib
@@ -38,9 +40,18 @@ EXPECTED_FEATURES = FACE_COUNT * 3 + POSE_COUNT * 4
 
 DESPIERTO_THRESHOLD = 0.50
 SMOOTHING_WINDOW = 12
-LOG_EVERY_N_FRAMES = 1
+LOG_EVERY_N_FRAMES = 10
+
+# Eye closure thresholds. Tune these per camera/lighting if needed, but keep
+# the temporal gate: a single blink should never become a drowsiness event.
+EAR_CLOSED_THRESHOLD = 0.20
+EAR_PARTIAL_THRESHOLD = 0.26
+EYE_CLOSED_SECONDS_THRESHOLD = 1.50
+EYE_PARTIAL_SECONDS_THRESHOLD = 2.50
+NORMAL_BLINK_MAX_SECONDS = 0.35
 
 sys.path.insert(0, str(MODEL_DIR))
+from model.biometrics import calculate_eye_aspect_ratio, estimate_head_pitch # noqa: E402
 from model.data_collection import normalize_landmarks # noqa: E402
 
 
@@ -66,6 +77,114 @@ class PredictionSmoother:
         )
         confidence = avg[predicted_label]
         return predicted_label, confidence, avg
+
+
+@dataclass
+class EyeEvidence:
+    ear: float | None
+    left_ear: float | None
+    right_ear: float | None
+    state: str
+    closed_seconds: float
+    partial_seconds: float
+    is_drowsy: bool
+    confidence: float
+
+
+@dataclass
+class DetectionDecision:
+    state: str
+    confidence: float
+    head_drowsy: bool
+    eye_drowsy: bool
+
+
+class EyeClosureTracker:
+    """Tracks eye closure over time so blinks do not become alerts."""
+
+    def __init__(
+        self,
+        closed_threshold=EAR_CLOSED_THRESHOLD,
+        partial_threshold=EAR_PARTIAL_THRESHOLD,
+        closed_seconds_threshold=EYE_CLOSED_SECONDS_THRESHOLD,
+        partial_seconds_threshold=EYE_PARTIAL_SECONDS_THRESHOLD,
+    ):
+        self.closed_threshold = closed_threshold
+        self.partial_threshold = partial_threshold
+        self.closed_seconds_threshold = closed_seconds_threshold
+        self.partial_seconds_threshold = partial_seconds_threshold
+        self.closed_started_at = None
+        self.partial_started_at = None
+
+    def clear(self):
+        self.closed_started_at = None
+        self.partial_started_at = None
+
+    def update(self, ear_result, now):
+        if ear_result is None:
+            self.clear()
+            return EyeEvidence(
+                ear=None,
+                left_ear=None,
+                right_ear=None,
+                state="Sin EAR",
+                closed_seconds=0.0,
+                partial_seconds=0.0,
+                is_drowsy=False,
+                confidence=0.0,
+            )
+
+        ear = ear_result.average
+        if ear < self.closed_threshold:
+            if self.closed_started_at is None:
+                self.closed_started_at = now
+            if self.partial_started_at is None:
+                self.partial_started_at = now
+            state = "Parpadeo"
+        elif ear < self.partial_threshold:
+            self.closed_started_at = None
+            if self.partial_started_at is None:
+                self.partial_started_at = now
+            state = "Ojos parcialmente cerrados"
+        else:
+            self.clear()
+            return EyeEvidence(
+                ear=ear,
+                left_ear=ear_result.left,
+                right_ear=ear_result.right,
+                state="Ojos abiertos",
+                closed_seconds=0.0,
+                partial_seconds=0.0,
+                is_drowsy=False,
+                confidence=0.0,
+            )
+
+        closed_seconds = 0.0 if self.closed_started_at is None else now - self.closed_started_at
+        partial_seconds = 0.0 if self.partial_started_at is None else now - self.partial_started_at
+
+        if ear < self.closed_threshold and closed_seconds > NORMAL_BLINK_MAX_SECONDS:
+            state = "Ojos cerrados"
+
+        closed_drowsy = ear < self.closed_threshold and closed_seconds >= self.closed_seconds_threshold
+        partial_drowsy = ear < self.partial_threshold and partial_seconds >= self.partial_seconds_threshold
+        is_drowsy = closed_drowsy or partial_drowsy
+
+        confidence = 0.0
+        if ear < self.closed_threshold:
+            confidence = min(1.0, closed_seconds / self.closed_seconds_threshold)
+        elif ear < self.partial_threshold:
+            confidence = min(0.85, partial_seconds / self.partial_seconds_threshold)
+
+        return EyeEvidence(
+            ear=ear,
+            left_ear=ear_result.left,
+            right_ear=ear_result.right,
+            state=state,
+            closed_seconds=closed_seconds,
+            partial_seconds=partial_seconds,
+            is_drowsy=is_drowsy,
+            confidence=float(confidence),
+        )
 
 
 class OutputInterpreter:
@@ -468,7 +587,68 @@ def infer_state(model, model_input, interpreter):
     return predicted_label, confidence, probabilities, raw_output
 
 
-def log_prediction(frame_index, input_shape, probabilities, raw_label, raw_confidence, smooth_label, smooth_confidence):
+def combine_signals(smooth_label, smooth_confidence, smooth_probabilities, eye_evidence):
+    """Combine the existing TensorFlow signal with direct EAR evidence."""
+    head_drowsy = smooth_label == LABEL_SOMNOLENCIA
+    eye_drowsy = eye_evidence.is_drowsy
+
+    if head_drowsy and eye_drowsy:
+        return DetectionDecision(
+            state="Somnolencia crítica",
+            confidence=min(1.0, max(smooth_confidence, eye_evidence.confidence) + 0.15),
+            head_drowsy=True,
+            eye_drowsy=True,
+        )
+
+    if eye_drowsy:
+        return DetectionDecision(
+            state="Somnolencia por ojos",
+            confidence=eye_evidence.confidence,
+            head_drowsy=False,
+            eye_drowsy=True,
+        )
+
+    if head_drowsy:
+        return DetectionDecision(
+            state="Somnolencia por cabeceo",
+            confidence=smooth_probabilities[LABEL_SOMNOLENCIA],
+            head_drowsy=True,
+            eye_drowsy=False,
+        )
+
+    return DetectionDecision(
+        state="Despierto",
+        confidence=smooth_probabilities[LABEL_DESPIERTO],
+        head_drowsy=False,
+        eye_drowsy=False,
+    )
+
+
+def empty_probabilities():
+    return {
+        LABEL_SOMNOLENCIA: 0.0,
+        LABEL_DESPIERTO: 0.0,
+    }
+
+
+def format_metric(value, suffix="", missing="N/A", precision=2):
+    if value is None:
+        return missing
+    return f"{value:.{precision}f}{suffix}"
+
+
+def log_prediction(
+    frame_index,
+    input_shape,
+    probabilities,
+    raw_label,
+    raw_confidence,
+    smooth_label,
+    smooth_confidence,
+    eye_evidence,
+    head_pitch,
+    final_decision,
+):
     if frame_index % LOG_EVERY_N_FRAMES != 0:
         return
 
@@ -478,7 +658,12 @@ def log_prediction(frame_index, input_shape, probabilities, raw_label, raw_confi
         f"probabilidades={{Somnolencia: {probabilities[LABEL_SOMNOLENCIA]:.4f}, "
         f"Despierto: {probabilities[LABEL_DESPIERTO]:.4f}}} | "
         f"clase_modelo={CLASS_NAMES[raw_label]} | confianza_modelo={raw_confidence:.4f} | "
-        f"clase_suavizada={CLASS_NAMES[smooth_label]} | confianza_suavizada={smooth_confidence:.4f}"
+        f"clase_suavizada={CLASS_NAMES[smooth_label]} | confianza_suavizada={smooth_confidence:.4f} | "
+        f"EAR={format_metric(eye_evidence.ear)} | ojos={eye_evidence.state} | "
+        f"t_cerrado={eye_evidence.closed_seconds:.2f}s | "
+        f"t_parcial={eye_evidence.partial_seconds:.2f}s | "
+        f"pitch={format_metric(head_pitch, suffix=' deg')} | "
+        f"estado_final={final_decision.state} | confianza_final={final_decision.confidence:.4f}"
     )
 
 
@@ -500,10 +685,20 @@ def draw_landmarks(frame, results, mp_drawing, mp_holistic):
         )
 
 
-def render_status(frame, estado, confidence=None, probabilities=None):
-    if estado == "No hay landmarks":
+def render_status(
+    frame,
+    estado,
+    confidence=None,
+    probabilities=None,
+    eye_evidence=None,
+    head_pitch=None,
+    model_available=False,
+):
+    if estado == "No hay rostro":
         color = (0, 165, 255)
-    elif estado == "Somnolencia":
+    elif estado == "Somnolencia crítica":
+        color = (0, 0, 180)
+    elif estado in ("Somnolencia por ojos", "Somnolencia por cabeceo"):
         color = (0, 0, 255)
     else:
         color = (0, 255, 0)
@@ -519,23 +714,42 @@ def render_status(frame, estado, confidence=None, probabilities=None):
     )
 
     if probabilities is None:
-        detail = "Sin rostro/pose detectados"
+        probabilities = empty_probabilities()
+
+    model_detail = (
+        f"Modelo Somn: {probabilities[LABEL_SOMNOLENCIA]:.2f} | "
+        f"Desp: {probabilities[LABEL_DESPIERTO]:.2f}"
+    )
+    confidence_detail = "Conf final: N/A" if confidence is None else f"Conf final: {confidence:.2f}"
+    if not model_available:
+        model_detail += " | Modelo: sin rostro/pose"
+
+    if eye_evidence is None:
+        ear_detail = "EAR: N/A"
+        eye_detail = "Ojos: Sin EAR | Cerrado: 0.00s | Parcial: 0.00s"
     else:
-        detail = (
-            f"Somn: {probabilities[LABEL_SOMNOLENCIA]:.2f} | "
-            f"Desp: {probabilities[LABEL_DESPIERTO]:.2f} | "
-            f"Conf: {confidence:.2f}"
+        ear_detail = (
+            f"EAR: {format_metric(eye_evidence.ear)} "
+            f"(L {format_metric(eye_evidence.left_ear)}, R {format_metric(eye_evidence.right_ear)})"
+        )
+        eye_detail = (
+            f"Ojos: {eye_evidence.state} | Cerrado: {eye_evidence.closed_seconds:.2f}s | "
+            f"Parcial: {eye_evidence.partial_seconds:.2f}s"
         )
 
-    cv2.putText(
-        frame,
-        detail,
-        (30, 100),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (255, 255, 255),
-        2,
-    )
+    pitch_detail = f"Angulo cabeza: {format_metric(head_pitch, suffix=' deg')}"
+
+    status_lines = (model_detail, confidence_detail, ear_detail, eye_detail, pitch_detail)
+    for line_index, detail in enumerate(status_lines, start=1):
+        cv2.putText(
+            frame,
+            detail,
+            (30, 60 + (line_index * 28)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2,
+        )
 
 
 def open_camera(camera_index=0):
@@ -550,6 +764,7 @@ def run_realtime_detection():
     model, scaler, expected_features, interpreter = load_runtime_assets()
     cap = open_camera(0)
     smoother = PredictionSmoother()
+    eye_tracker = EyeClosureTracker()
 
     mp_holistic = mp.solutions.holistic
     mp_drawing = mp.solutions.drawing_utils
@@ -578,35 +793,101 @@ def run_realtime_detection():
 
             draw_landmarks(frame, results, mp_drawing, mp_holistic)
 
-            estado = "No hay landmarks"
+            now = time.monotonic()
+            face_detected = results.face_landmarks is not None
+            ear_result = calculate_eye_aspect_ratio(results.face_landmarks) if face_detected else None
+            eye_evidence = eye_tracker.update(ear_result, now) if face_detected else eye_tracker.update(None, now)
+            head_pitch = estimate_head_pitch(results.face_landmarks, frame.shape) if face_detected else None
+
+            estado = "No hay rostro"
             confidence = None
-            probabilities = None
+            probabilities = empty_probabilities()
+            smooth_probabilities = empty_probabilities()
+            smooth_label = LABEL_DESPIERTO
+            model_available = False
             values = extract_landmarks(results)
 
-            if values is None:
-                # Do not reuse stale predictions when the face/pose is gone.
+            if not face_detected:
+                # Do not reuse stale predictions when the face is gone.
                 smoother.clear()
-                render_status(frame, estado)
+                render_status(
+                    frame,
+                    estado,
+                    confidence,
+                    probabilities,
+                    eye_evidence,
+                    head_pitch,
+                    model_available=False,
+                )
             else:
-                try:
-                    model_input = preprocess_landmarks(values, scaler, model, expected_features)
-                    raw_label, raw_confidence, probabilities, _ = infer_state(model, model_input, interpreter)
-                    smooth_label, confidence, smooth_probabilities = smoother.update(probabilities)
-                    estado = CLASS_NAMES[smooth_label]
-                    render_status(frame, estado, confidence, smooth_probabilities)
-                    log_prediction(
-                        frame_index,
-                        model_input.shape,
-                        probabilities,
-                        raw_label,
-                        raw_confidence,
-                        smooth_label,
-                        confidence,
-                    )
-                except Exception as exc:
+                if values is None:
+                    # EAR can still work with a face only; the model requires pose too.
                     smoother.clear()
-                    print(f"[ERROR] Inferencia omitida: {exc}")
-                    render_status(frame, "No hay landmarks")
+                    decision = combine_signals(
+                        smooth_label,
+                        0.0,
+                        smooth_probabilities,
+                        eye_evidence,
+                    )
+                    render_status(
+                        frame,
+                        decision.state,
+                        decision.confidence,
+                        smooth_probabilities,
+                        eye_evidence,
+                        head_pitch,
+                        model_available=False,
+                    )
+                else:
+                    try:
+                        model_input = preprocess_landmarks(values, scaler, model, expected_features)
+                        raw_label, raw_confidence, probabilities, _ = infer_state(model, model_input, interpreter)
+                        smooth_label, smooth_confidence, smooth_probabilities = smoother.update(probabilities)
+                        decision = combine_signals(
+                            smooth_label,
+                            smooth_confidence,
+                            smooth_probabilities,
+                            eye_evidence,
+                        )
+                        render_status(
+                            frame,
+                            decision.state,
+                            decision.confidence,
+                            smooth_probabilities,
+                            eye_evidence,
+                            head_pitch,
+                            model_available=True,
+                        )
+                        log_prediction(
+                            frame_index,
+                            model_input.shape,
+                            probabilities,
+                            raw_label,
+                            raw_confidence,
+                            smooth_label,
+                            smooth_confidence,
+                            eye_evidence,
+                            head_pitch,
+                            decision,
+                        )
+                    except Exception as exc:
+                        smoother.clear()
+                        print(f"[ERROR] Inferencia omitida: {exc}")
+                        decision = combine_signals(
+                            LABEL_DESPIERTO,
+                            0.0,
+                            empty_probabilities(),
+                            eye_evidence,
+                        )
+                        render_status(
+                            frame,
+                            decision.state,
+                            decision.confidence,
+                            empty_probabilities(),
+                            eye_evidence,
+                            head_pitch,
+                            model_available=False,
+                        )
 
             cv2.imshow("Deteccion de Somnolencia", frame)
             key = cv2.waitKey(1) & 0xFF
