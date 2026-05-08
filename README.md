@@ -111,3 +111,5 @@ Your data will help train a more accurate and reliable drowsiness detection mode
 
 
 # python app.py
+
+# (.venv) PS C:\xampp\htdocs\vision\vision\model> python data_collection.py
