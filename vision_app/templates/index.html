@@ -405,6 +405,7 @@
         <div class="hero-actions">
             {% if current_user.is_authenticated %}
                 <a href="{{ url_for('dashboard') }}" class="btn-primary">Ir al Dashboard</a>
+                <a href="{{ url_for('alan-lopez') }}" class="btn-primary">Ir al alan lopez</a>
             {% else %}
                 <a href="{{ url_for('register') }}" class="btn-primary">Crear cuenta</a>
                 <a href="{{ url_for('login') }}" class="btn-ghost">Iniciar sesión</a>
