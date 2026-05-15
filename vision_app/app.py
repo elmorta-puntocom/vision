@@ -175,10 +175,6 @@ def serve_video(det_id):
     filename  = os.path.basename(det.video_path)
     return send_from_directory(directory, filename)
 
-@app.route('/alan-lopez')
-def mi_pagina():
-    return render_template('alan-lopez.html')
-
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
