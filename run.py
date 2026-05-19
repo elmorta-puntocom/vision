@@ -1,10 +1,4 @@
 import os
-import sys
-from pathlib import Path
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
 
 from app import create_app, db, logger
 from app.services import start_sync_thread

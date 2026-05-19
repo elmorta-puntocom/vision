@@ -1,0 +1,354 @@
+﻿{% extends 'base.html' %}
+
+{% block title %}Iniciar sesión — Vision{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .login-wrapper {
+        min-height: calc(100vh - 4rem);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+    }
+
+    /* Left: decorative */
+    .login-left {
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        padding: 5rem;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .login-left::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background:
+            repeating-linear-gradient(45deg, transparent, transparent 40px, rgba(0,229,255,0.015) 40px, rgba(0,229,255,0.015) 41px);
+    }
+
+    .big-eye {
+        position: relative;
+        z-index: 1;
+        text-align: center;
+    }
+
+    .eye-graphic {
+        width: 200px;
+        height: 100px;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 2rem;
+        position: relative;
+    }
+
+    .eye-graphic::before,
+    .eye-graphic::after {
+        content: '';
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        border: 1px solid rgba(0,229,255,0.15);
+        border-radius: 50%;
+        animation: expandRing 2.5s ease-out infinite;
+    }
+
+    .eye-graphic::after { animation-delay: 1.25s; }
+
+    @keyframes expandRing {
+        0%   { transform: scale(1); opacity: 0.6; }
+        100% { transform: scale(1.8); opacity: 0; }
+    }
+
+    .pupil {
+        width: 52px;
+        height: 52px;
+        background: var(--bg);
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .pupil::after {
+        content: '';
+        width: 20px;
+        height: 20px;
+        background: var(--accent);
+        border-radius: 50%;
+        animation: scanPupil 3s ease-in-out infinite;
+    }
+
+    @keyframes scanPupil {
+        0%, 100% { transform: translate(0, 0); }
+        25%       { transform: translate(8px, -3px); }
+        50%       { transform: translate(-8px, 3px); }
+        75%       { transform: translate(4px, 6px); }
+    }
+
+    .big-eye-label {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.2em;
+        color: var(--text-muted);
+        text-transform: uppercase;
+    }
+
+    .status-grid {
+        position: absolute;
+        bottom: 3rem;
+        left: 3rem;
+        right: 3rem;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1px;
+        background: var(--border);
+    }
+
+    .status-item {
+        background: var(--surface);
+        padding: 0.75rem 1rem;
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+    }
+
+    .status-key { color: var(--text-muted); }
+    .status-val { color: var(--accent); margin-top: 0.15rem; }
+
+    /* Right: form */
+    .login-right {
+        padding: 5rem 4rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        max-width: 480px;
+    }
+
+    .form-header { margin-bottom: 2.5rem; }
+    .form-header h1 {
+        font-size: 2rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        margin-bottom: 0.5rem;
+    }
+    .form-header p {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        color: var(--text-muted);
+    }
+    .form-header a { color: var(--accent); text-decoration: none; }
+
+    .form-group { margin-bottom: 1.25rem; }
+
+    label {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 0.5rem;
+    }
+
+    input[type="email"],
+    input[type="password"],
+    input[type="text"] {
+        width: 100%;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+        padding: 0.8rem 1rem;
+        outline: none;
+        transition: border-color 0.2s;
+        border-radius: var(--radius);
+    }
+
+    input:focus { border-color: var(--accent); }
+
+    .pw-wrapper { position: relative; }
+    .pw-toggle {
+        position: absolute;
+        right: 0.75rem;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+    }
+    .pw-toggle:hover { color: var(--accent); }
+
+    .remember-row {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .remember-row input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--accent);
+    }
+
+    .remember-row label {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        color: var(--text-mid);
+        letter-spacing: 0.05em;
+        text-transform: none;
+        margin: 0;
+        cursor: pointer;
+    }
+
+    .btn-submit {
+        width: 100%;
+        padding: 1rem;
+        background: var(--accent);
+        color: var(--bg);
+        border: none;
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: all 0.2s;
+        border-radius: var(--radius);
+    }
+    .btn-submit:hover { background: #00b8cc; }
+
+    .divider {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 1.5rem 0;
+    }
+
+    .security-note {
+        display: flex;
+        gap: 0.5rem;
+        align-items: flex-start;
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        line-height: 1.6;
+    }
+
+    .security-note::before {
+        content: '🔒';
+        flex-shrink: 0;
+        font-size: 0.8rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="login-wrapper">
+
+    <!-- LEFT decorative panel -->
+    <div class="login-left">
+        <div class="big-eye">
+            <div class="eye-graphic">
+                <div class="pupil"></div>
+            </div>
+            <div class="big-eye-label">Sistema activo — Monitoreando</div>
+        </div>
+
+        <div class="status-grid">
+            <div class="status-item">
+                <div class="status-key">ESTADO</div>
+                <div class="status-val">ONLINE</div>
+            </div>
+            <div class="status-item">
+                <div class="status-key">DETECCIÓN</div>
+                <div class="status-val">EAR + PITCH</div>
+            </div>
+            <div class="status-item">
+                <div class="status-key">ENCRIPTACIÓN</div>
+                <div class="status-val">BCRYPT</div>
+            </div>
+            <div class="status-item">
+                <div class="status-key">ACCESO</div>
+                <div class="status-val">PRIVADO</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: login form -->
+    <div class="login-right">
+        <div class="form-header">
+            <h1>Iniciar sesión</h1>
+            <p>¿No tenés cuenta? <a href="{{ url_for('main.register') }}">Registrate gratis</a></p>
+        </div>
+
+        <form method="POST" action="{{ url_for('main.login') }}" id="loginForm">
+
+            <div class="form-group">
+                <label for="email">Correo electrónico</label>
+                <input type="email" id="email" name="email"
+                       placeholder="tu@correo.com"
+                       autocomplete="email" required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Contraseña</label>
+                <div class="pw-wrapper">
+                    <input type="password" id="password" name="password"
+                           placeholder="••••••••"
+                           autocomplete="current-password" required>
+                    <button type="button" class="pw-toggle" id="togglePw">MOSTRAR</button>
+                </div>
+            </div>
+
+            <div class="remember-row">
+                <input type="checkbox" id="remember" name="remember">
+                <label for="remember">Recordar mi sesión</label>
+            </div>
+
+            <button type="submit" class="btn-submit">
+                Iniciar sesión
+            </button>
+
+            <hr class="divider">
+
+            <div class="security-note">
+                Tu contraseña nunca se almacena en texto plano. Vision utiliza
+                hash Bcrypt con salt único para proteger tus credenciales.
+                El acceso a tus videos de detección está restringido exclusivamente a tu cuenta.
+            </div>
+
+        </form>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.getElementById('togglePw').addEventListener('click', function() {
+        const inp = document.getElementById('password');
+        if (inp.type === 'password') {
+            inp.type = 'text';
+            this.textContent = 'OCULTAR';
+        } else {
+            inp.type = 'password';
+            this.textContent = 'MOSTRAR';
+        }
+    });
+</script>
+{% endblock %}
+

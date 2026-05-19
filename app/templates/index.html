@@ -1,0 +1,596 @@
+﻿{% extends 'base.html' %}
+
+{% block extra_styles %}
+<style>
+    /* ── Hero ── */
+    .hero {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4rem;
+        align-items: center;
+        padding: 6rem 5rem 4rem;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .hero::after {
+        content: '';
+        position: absolute;
+        top: -20%;
+        right: -5%;
+        width: 600px;
+        height: 600px;
+        background: radial-gradient(circle, rgba(0,229,255,0.07) 0%, transparent 70%);
+        pointer-events: none;
+    }
+
+    .hero-tag {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    .hero-tag::before {
+        content: '';
+        width: 32px;
+        height: 1px;
+        background: var(--accent);
+    }
+
+    .hero h1 {
+        font-size: clamp(2.8rem, 5vw, 4.5rem);
+        font-weight: 800;
+        line-height: 1.05;
+        letter-spacing: -0.02em;
+        margin-bottom: 1.5rem;
+        color: var(--text);
+    }
+
+    .hero h1 .accent { color: var(--accent); }
+    .hero h1 .dim { color: var(--text-muted); }
+
+    .hero-desc {
+        font-size: 1rem;
+        color: var(--text-mid);
+        line-height: 1.8;
+        max-width: 480px;
+        margin-bottom: 2.5rem;
+    }
+
+    .hero-actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+
+    .btn-primary {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        padding: 0.9rem 2rem;
+        background: var(--accent);
+        color: var(--bg);
+        border: none;
+        text-decoration: none;
+        cursor: pointer;
+        font-weight: 700;
+        transition: all 0.2s;
+        display: inline-block;
+    }
+    .btn-primary:hover { background: #00b8cc; transform: translateY(-1px); }
+
+    .btn-ghost {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        padding: 0.9rem 2rem;
+        border: 1px solid var(--border);
+        color: var(--text-mid);
+        text-decoration: none;
+        transition: all 0.2s;
+        display: inline-block;
+    }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Eye diagram ── */
+    .hero-visual {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        position: relative;
+    }
+
+    .eye-ring {
+        position: relative;
+        width: 320px;
+        height: 320px;
+    }
+
+    .eye-ring svg {
+        width: 100%;
+        height: 100%;
+        animation: rotateSlow 20s linear infinite;
+    }
+
+    @keyframes rotateSlow {
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
+    }
+
+    .eye-center {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .eye-pulse {
+        width: 120px;
+        height: 60px;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .eye-pulse::before {
+        content: '';
+        position: absolute;
+        inset: -8px;
+        border: 1px solid rgba(0,229,255,0.2);
+        border-radius: 50%;
+        animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { transform: scale(1); opacity: 0.5; }
+        50% { transform: scale(1.15); opacity: 0; }
+    }
+
+    .iris {
+        width: 32px;
+        height: 32px;
+        background: var(--accent);
+        border-radius: 50%;
+        position: relative;
+        animation: blink 4s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+        0%, 45%, 55%, 100% { transform: scaleY(1); }
+        50% { transform: scaleY(0.05); }
+    }
+
+    .iris::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 14px;
+        height: 14px;
+        background: var(--bg);
+        border-radius: 50%;
+    }
+
+    /* ── Stats bar ── */
+    .stats-bar {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        margin: 0 5rem;
+    }
+
+    .stat {
+        padding: 2rem;
+        border-right: 1px solid var(--border);
+        text-align: center;
+    }
+    .stat:last-child { border-right: none; }
+
+    .stat-num {
+        font-family: var(--font-mono);
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: var(--accent);
+        display: block;
+        line-height: 1;
+    }
+
+    .stat-label {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-top: 0.5rem;
+        display: block;
+    }
+
+    /* ── Section: Producto ── */
+    .section {
+        padding: 6rem 5rem;
+    }
+
+    .section-header {
+        margin-bottom: 4rem;
+    }
+
+    .section-title {
+        font-size: 2.2rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        margin-top: 0.75rem;
+    }
+
+    /* ── Cards ── */
+    .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 1.5px;
+        background: var(--border);
+    }
+
+    .card {
+        background: var(--surface);
+        padding: 2.5rem;
+        position: relative;
+        overflow: hidden;
+        transition: background 0.2s;
+    }
+    .card:hover { background: var(--surface2); }
+
+    .card::before {
+        content: attr(data-num);
+        position: absolute;
+        top: 1.5rem;
+        right: 1.5rem;
+        font-family: var(--font-mono);
+        font-size: 4rem;
+        font-weight: 700;
+        color: rgba(0,229,255,0.04);
+        line-height: 1;
+    }
+
+    .card-icon {
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 1.5rem;
+        color: var(--accent);
+    }
+
+    .card h3 {
+        font-size: 1rem;
+        font-weight: 700;
+        margin-bottom: 0.75rem;
+        letter-spacing: 0.02em;
+    }
+
+    .card p {
+        font-size: 0.875rem;
+        color: var(--text-mid);
+        line-height: 1.7;
+    }
+
+    /* ── CTA section ── */
+    .cta-section {
+        padding: 5rem;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 3rem;
+        align-items: center;
+    }
+
+    .cta-title {
+        font-size: 1.8rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+    }
+
+    .cta-sub {
+        font-size: 0.9rem;
+        color: var(--text-mid);
+        margin-top: 0.5rem;
+    }
+
+    /* ── Tech section ── */
+    .tech-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1px;
+        background: var(--border);
+    }
+
+    .tech-item {
+        background: var(--surface);
+        padding: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        transition: background 0.2s;
+    }
+    .tech-item:hover { background: var(--surface2); }
+
+    .tech-dot {
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        flex-shrink: 0;
+    }
+
+    .tech-name {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: var(--text);
+        display: block;
+    }
+
+    .tech-role {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        margin-top: 0.2rem;
+        display: block;
+    }
+
+    /* ── Pipeline ── */
+    .pipeline {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        position: relative;
+        margin-top: 3rem;
+        gap: 1px;
+        background: var(--border);
+    }
+
+    .pipe-step {
+        background: var(--surface);
+        padding: 2rem;
+        position: relative;
+    }
+
+    .pipe-num {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+        margin-bottom: 1rem;
+        display: block;
+    }
+
+    .pipe-title {
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+    }
+
+    .pipe-desc {
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        line-height: 1.6;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- HERO -->
+<section class="hero">
+    <div class="hero-content">
+        <div class="hero-tag">Seguridad Vial — Visión Artificial</div>
+        <h1>
+            Detectamos la<br>
+            <span class="accent">somnolencia</span><br>
+            <span class="dim">antes del accidente</span>
+        </h1>
+        <p class="hero-desc">
+            Sistema de monitoreo biométrico en tiempo real que analiza el estado ocular y postura del conductor para prevenir accidentes por fatiga al volante.
+        </p>
+        <div class="hero-actions">
+            {% if current_user.is_authenticated %}
+                <a href="{{ url_for('main.dashboard') }}" class="btn-primary">Ir al Dashboard</a>
+            {% else %}
+                <a href="{{ url_for('main.register') }}" class="btn-primary">Crear cuenta</a>
+                <a href="{{ url_for('main.login') }}" class="btn-ghost">Iniciar sesión</a>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="hero-visual">
+        <div class="eye-ring">
+            <svg viewBox="0 0 320 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="160" cy="160" r="140" stroke="#1e2d3d" stroke-width="1" stroke-dasharray="4 8"/>
+                <circle cx="160" cy="160" r="110" stroke="#00e5ff" stroke-width="0.5" stroke-dasharray="2 6" opacity="0.4"/>
+                <circle cx="160" cy="160" r="155" stroke="#1e2d3d" stroke-width="1"/>
+                <!-- tick marks -->
+                {% for i in range(24) %}
+                <line x1="160" y1="5" x2="160" y2="20" stroke="#00e5ff" stroke-width="1" opacity="0.5"
+                      transform="rotate({{ i * 15 }} 160 160)"/>
+                {% endfor %}
+            </svg>
+            <div class="eye-center">
+                <div class="eye-pulse">
+                    <div class="iris"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- STATS BAR -->
+<div class="stats-bar">
+    <div class="stat">
+        <span class="stat-num">&lt;500ms</span>
+        <span class="stat-label">Tiempo de detección</span>
+    </div>
+    <div class="stat">
+        <span class="stat-num">10s</span>
+        <span class="stat-label">Búfer de evidencia pre-evento</span>
+    </div>
+    <div class="stat">
+        <span class="stat-num">468</span>
+        <span class="stat-label">Landmarks faciales analizados</span>
+    </div>
+</div>
+
+<!-- PRODUCTO -->
+<section class="section" id="producto">
+    <div class="section-header">
+        <span class="tag">El problema</span>
+        <h2 class="section-title">Un sistema de 4 pilares</h2>
+    </div>
+
+    <div class="cards">
+        <div class="card" data-num="01">
+            <div class="card-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+            </div>
+            <h3>Captura de datos</h3>
+            <p>Cámara (smartphone o IP Gadnic) captura el rostro del conductor con soporte de visión nocturna infrarroja.</p>
+        </div>
+        <div class="card" data-num="02">
+            <div class="card-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+            </div>
+            <h3>IA en tiempo real</h3>
+            <p>MediaPipe Face Mesh calcula el EAR (Eye Aspect Ratio) y el ángulo Pitch para detectar micro-sueños y cabeceos.</p>
+        </div>
+        <div class="card" data-num="03">
+            <div class="card-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/>
+                </svg>
+            </div>
+            <h3>Alerta persistente</h3>
+            <p>El ESP32 activa buzzer y vibración que no se detienen hasta que la IA confirma que el conductor ha recuperado el estado de alerta.</p>
+        </div>
+        <div class="card" data-num="04">
+            <div class="card-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                </svg>
+            </div>
+            <h3>Caja negra digital</h3>
+            <p>Cada evento genera un clip de video (10s pre + post) almacenado de forma encriptada en el perfil privado del conductor.</p>
+        </div>
+    </div>
+</section>
+
+<!-- PIPELINE -->
+<section class="section" id="tecnologia" style="padding-top: 0;">
+    <div class="section-header">
+        <span class="tag">Arquitectura</span>
+        <h2 class="section-title">Ciclo de detección</h2>
+    </div>
+    <div class="pipeline">
+        <div class="pipe-step">
+            <span class="pipe-num">FASE 01</span>
+            <div class="pipe-title">Búfer circular</div>
+            <p class="pipe-desc">OpenCV mantiene los últimos 300 frames (10s) en RAM, listo para capturar el pre-evento.</p>
+        </div>
+        <div class="pipe-step">
+            <span class="pipe-num">FASE 02</span>
+            <div class="pipe-title">Detección IA</div>
+            <p class="pipe-desc">Si EAR &lt; 0.20 o Pitch &gt; 30° por más de 1.5s consecutivos → Evento confirmado.</p>
+        </div>
+        <div class="pipe-step">
+            <span class="pipe-num">FASE 03</span>
+            <div class="pipe-title">Actuación</div>
+            <p class="pipe-desc">ESP32 activa buzzer y motor vibrador. La alarma persiste hasta confirmar reacción real.</p>
+        </div>
+        <div class="pipe-step">
+            <span class="pipe-num">FASE 04</span>
+            <div class="pipe-title">Registro</div>
+            <p class="pipe-desc">Video concatenado sube al servidor Flask, vinculado al user_id del conductor autenticado.</p>
+        </div>
+    </div>
+</section>
+
+<!-- TECH STACK -->
+<section class="section" style="padding-top: 0;">
+    <div class="section-header">
+        <span class="tag">Stack tecnológico</span>
+        <h2 class="section-title">Tecnologías utilizadas</h2>
+    </div>
+    <div class="tech-grid">
+        <div class="tech-item">
+            <div class="tech-dot"></div>
+            <div>
+                <span class="tech-name">Python + MediaPipe</span>
+                <span class="tech-role">Motor de IA y landmarks</span>
+            </div>
+        </div>
+        <div class="tech-item">
+            <div class="tech-dot"></div>
+            <div>
+                <span class="tech-name">OpenCV</span>
+                <span class="tech-role">Captura y procesamiento de video</span>
+            </div>
+        </div>
+        <div class="tech-item">
+            <div class="tech-dot"></div>
+            <div>
+                <span class="tech-name">Flask + SQLite</span>
+                <span class="tech-role">Backend web y base de datos</span>
+            </div>
+        </div>
+        <div class="tech-item">
+            <div class="tech-dot"></div>
+            <div>
+                <span class="tech-name">Bcrypt</span>
+                <span class="tech-role">Hash de contraseñas</span>
+            </div>
+        </div>
+        <div class="tech-item">
+            <div class="tech-dot"></div>
+            <div>
+                <span class="tech-name">ESP32</span>
+                <span class="tech-role">Nodo de actuación embebido</span>
+            </div>
+        </div>
+        <div class="tech-item">
+            <div class="tech-dot"></div>
+            <div>
+                <span class="tech-name">SQLAlchemy ORM</span>
+                <span class="tech-role">Gestión relacional de datos</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- CTA -->
+{% if not current_user.is_authenticated %}
+<section class="cta-section">
+    <div>
+        <div class="cta-title">¿Sos conductor o gestionás una flota?</div>
+        <div class="cta-sub">Creá tu cuenta y accedé a tu historial de seguridad personal.</div>
+    </div>
+    <div style="display:flex; gap: 1rem;">
+        <a href="{{ url_for('main.register') }}" class="btn-primary">Registrarse</a>
+        <a href="{{ url_for('main.login') }}" class="btn-ghost">Iniciar sesión</a>
+    </div>
+</section>
+{% endif %}
+
+{% endblock %}
+
