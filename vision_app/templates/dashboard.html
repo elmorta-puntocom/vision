@@ -37,6 +37,46 @@
         color: var(--text-muted);
     }
 
+    /* Alerta de sincronización pendiente */
+    .sync-banner {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        background: var(--surface);
+        border: 1px solid var(--warning);
+        border-left: 3px solid var(--warning);
+        padding: 1rem 1.5rem;
+        margin-bottom: 2rem;
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        color: var(--warning);
+    }
+
+    .sync-banner .sync-icon {
+        font-size: 1rem;
+        animation: spin 2s linear infinite;
+        display: inline-block;
+    }
+
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to   { transform: rotate(360deg); }
+    }
+
+    .sync-ok-banner {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--success);
+        padding: 0.75rem 1.5rem;
+        margin-bottom: 2rem;
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        color: var(--text-muted);
+    }
+
     /* Stat cards */
     .dash-stats {
         display: grid;
@@ -129,6 +169,64 @@
         color: var(--text);
     }
 
+    /* Detections table */
+    .detections-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--surface);
+    }
+
+    .detections-table th {
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        text-align: left;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .detections-table td {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        color: var(--text-mid);
+        padding: 0.85rem 1rem;
+        border-bottom: 1px solid var(--border);
+        vertical-align: middle;
+    }
+
+    .detections-table tr:last-child td { border-bottom: none; }
+    .detections-table tr:hover td { background: var(--surface2); }
+
+    .badge {
+        display: inline-block;
+        padding: 0.2rem 0.6rem;
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        border-radius: 2px;
+    }
+
+    .badge-ojos    { background: rgba(255,59,107,0.15); color: var(--danger); border: 1px solid rgba(255,59,107,0.3); }
+    .badge-cabeceo { background: rgba(255,170,0,0.15);  color: var(--warning); border: 1px solid rgba(255,170,0,0.3); }
+    .badge-ambos   { background: rgba(0,229,255,0.1);   color: var(--accent); border: 1px solid rgba(0,229,255,0.2); }
+
+    /* Score bar */
+    .score-bar-wrap {
+        margin-top: 0.5rem;
+        background: var(--border);
+        height: 4px;
+        border-radius: 2px;
+        overflow: hidden;
+    }
+    .score-bar-fill {
+        height: 100%;
+        border-radius: 2px;
+        transition: width 0.5s;
+    }
+
     /* Empty state */
     .empty-state {
         background: var(--surface);
@@ -187,17 +285,46 @@
         <div class="dash-meta">{{ current_user.email }}</div>
     </div>
 
+    <!-- Banner de sincronización -->
+    {% if pendientes_count and pendientes_count > 0 %}
+    <div class="sync-banner">
+        <span class="sync-icon">⟳</span>
+        <span>
+            <strong>{{ pendientes_count }} detección{{ 'es' if pendientes_count != 1 else '' }} pendiente{{ 's' if pendientes_count != 1 else '' }} de sincronizar.</strong>
+            Estos registros se guardaron sin conexión y se subirán automáticamente al detectar WiFi.
+        </span>
+    </div>
+    {% else %}
+    <div class="sync-ok-banner">
+        <span style="color: var(--success);">✓</span>
+        <span>Todos los registros sincronizados con el servidor.</span>
+    </div>
+    {% endif %}
+
     <!-- Stats -->
     <div class="dash-stats">
         <div class="dash-stat">
             <span class="dash-stat-label">Detecciones totales</span>
-            <div class="dash-stat-val">0</div>
-            <div class="dash-stat-sub">Sin eventos aún</div>
+            <div class="dash-stat-val">{{ stats.total_eventos if stats else 0 }}</div>
+            <div class="dash-stat-sub">
+                {% if stats and stats.total_eventos > 0 %}
+                    Eventos registrados
+                {% else %}
+                    Sin eventos aún
+                {% endif %}
+            </div>
         </div>
         <div class="dash-stat">
-            <span class="dash-stat-label">Última detección</span>
-            <div class="dash-stat-val">—</div>
-            <div class="dash-stat-sub">Sin datos</div>
+            <span class="dash-stat-label">Score de conducción</span>
+            {% set score = stats.score_conduccion if stats else 100.0 %}
+            {% set score_color = 'var(--success)' if score >= 80 else ('var(--warning)' if score >= 50 else 'var(--danger)') %}
+            <div class="dash-stat-val" style="color: {{ score_color }};">
+                {{ "%.0f"|format(score) }}<span style="font-size:1rem; color: var(--text-muted);">/100</span>
+            </div>
+            <div class="score-bar-wrap">
+                <div class="score-bar-fill"
+                     style="width: {{ score }}%; background: {{ score_color }};"></div>
+            </div>
         </div>
         <div class="dash-stat">
             <span class="dash-stat-label">Estado del sistema</span>
@@ -229,17 +356,61 @@
             </div>
             <div class="account-field">
                 <label>Contraseña</label>
-                <div class="val" style="font-family: var(--font-mono); font-size:0.8rem;">••••••••  <span style="color:var(--success); font-size:0.7rem;">BCRYPT ✓</span></div>
+                <div class="val" style="font-family: var(--font-mono); font-size:0.8rem;">
+                    ••••••••  <span style="color:var(--success); font-size:0.7rem;">BCRYPT ✓</span>
+                </div>
             </div>
             <div class="account-field">
                 <label>Registro</label>
-                <div class="val" style="font-family: var(--font-mono); font-size:0.75rem;">{{ current_user.fecha_registro.strftime('%d/%m/%Y') }}</div>
+                <div class="val" style="font-family: var(--font-mono); font-size:0.75rem;">
+                    {{ current_user.fecha_registro.strftime('%d/%m/%Y') }}
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Events placeholder -->
+    <!-- Detections history -->
     <div class="section-label" style="margin-top: 2.5rem;">Historial de detecciones</div>
+
+    {% if detecciones %}
+    <table class="detections-table">
+        <thead>
+            <tr>
+                <th>Fecha y hora</th>
+                <th>Tipo de evento</th>
+                <th>EAR</th>
+                <th>Pitch</th>
+                <th>Duración alerta</th>
+                <th>Video</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for det in detecciones %}
+            <tr>
+                <td>{{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}</td>
+                <td>
+                    {% if det.tipo_evento == 'Ojos Cerrados' %}
+                        <span class="badge badge-ojos">Ojos Cerrados</span>
+                    {% elif det.tipo_evento == 'Cabeceo' %}
+                        <span class="badge badge-cabeceo">Cabeceo</span>
+                    {% else %}
+                        <span class="badge badge-ambos">Ambos</span>
+                    {% endif %}
+                </td>
+                <td>{{ "%.2f"|format(det.valor_ear) if det.valor_ear is not none else '—' }}</td>
+                <td>{{ "%.1f"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}°</td>
+                <td>{{ "%.1f"|format(det.duracion_alerta) if det.duracion_alerta is not none else '—' }}s</td>
+                <td>
+                    <a href="{{ url_for('serve_video', det_id=det.id) }}"
+                       style="color: var(--accent); font-size: 0.7rem; text-decoration: none;">
+                        ▶ Ver clip
+                    </a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
     <div class="empty-state">
         <div class="empty-icon">📹</div>
         <h3>Sin eventos registrados</h3>
@@ -248,5 +419,6 @@
             el clip de video aparecerá aquí de forma privada y encriptada.
         </p>
     </div>
+    {% endif %}
 </div>
 {% endblock %}
