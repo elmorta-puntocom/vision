@@ -16,7 +16,11 @@ from flask_login import current_user, login_required, login_user, logout_user
 
 from . import db, logger
 from .models import Deteccion, EstadisticaSeguridad, Usuario
-from .services import contar_pendientes_usuario, guardar_deteccion_offline
+from .services import (
+    contar_pendientes_usuario,
+    guardar_deteccion_offline,
+    mysql_disponible,
+)
 
 
 bp = Blueprint('main', __name__)
@@ -54,6 +58,10 @@ def register():
     if current_user.is_authenticated:
         return redirect(url_for('main.dashboard'))
 
+    if not mysql_disponible():
+        logger.warning('[REGISTER] Intento de registro bloqueado: MySQL offline.')
+        return redirect(url_for('main.register_offline'))
+
     if request.method == 'POST':
         nombre = request.form.get('nombre', '').strip()
         apellido = request.form.get('apellido', '').strip()
@@ -68,8 +76,6 @@ def register():
             errors.append('Apellido: mínimo 2 caracteres.')
         if not valid_email(email):
             errors.append('Correo inválido.')
-        if Usuario.query.filter_by(email=email).first():
-            errors.append('El correo ya está registrado.')
         ok, msg = valid_password(pw)
         if not ok:
             errors.append(msg)
@@ -84,15 +90,36 @@ def register():
                 form_data={'nombre': nombre, 'apellido': apellido, 'email': email},
             )
 
-        u = Usuario(nombre=nombre, apellido=apellido, email=email)
-        u.set_password(pw)
-        db.session.add(u)
-        db.session.commit()
+        try:
+            if Usuario.query.filter_by(email=email).first():
+                flash('El correo ya está registrado.', 'danger')
+                return render_template(
+                    'register.html',
+                    form_data={'nombre': nombre, 'apellido': apellido, 'email': email},
+                )
+
+            u = Usuario(nombre=nombre, apellido=apellido, email=email)
+            u.set_password(pw)
+            db.session.add(u)
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            logger.warning(f'[REGISTER] Error al crear usuario durante el registro: {exc}')
+            if not mysql_disponible():
+                return redirect(url_for('main.register_offline'))
+            raise
         _init_stats(u.id)
         flash('¡Cuenta creada! Podés iniciar sesión.', 'success')
         return redirect(url_for('main.login'))
 
     return render_template('register.html', form_data={})
+
+
+@bp.route('/register/offline')
+def register_offline():
+    if mysql_disponible():
+        return redirect(url_for('main.register'))
+    return render_template('register_offline.html')
 
 
 @bp.route('/login', methods=['GET', 'POST'])
@@ -104,7 +131,18 @@ def login():
         email = request.form.get('email', '').strip().lower()
         pw = request.form.get('password', '')
         remember = request.form.get('remember') == 'on'
-        u = Usuario.query.filter_by(email=email).first()
+
+        if not mysql_disponible():
+            logger.warning('[LOGIN] Intento de inicio de sesion bloqueado: MySQL offline.')
+            return redirect(url_for('main.login_offline'))
+
+        try:
+            u = Usuario.query.filter_by(email=email).first()
+        except Exception as exc:
+            logger.warning(f'[LOGIN] Error al consultar usuarios durante el login: {exc}')
+            if not mysql_disponible():
+                return redirect(url_for('main.login_offline'))
+            raise
 
         if u and u.check_password(pw):
             login_user(u, remember=remember)
@@ -114,6 +152,13 @@ def login():
         flash('Correo o contraseña incorrectos.', 'danger')
 
     return render_template('login.html')
+
+
+@bp.route('/login/offline')
+def login_offline():
+    if mysql_disponible():
+        return redirect(url_for('main.login'))
+    return render_template('login_offline.html')
 
 
 @bp.route('/logout')

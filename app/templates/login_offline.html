@@ -1,0 +1,177 @@
+{% extends 'base.html' %}
+
+{% block title %}Inicio de sesión no disponible — Vision{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .offline-wrapper {
+        min-height: calc(100vh - 4rem);
+        display: grid;
+        place-items: center;
+        padding: 3rem 1.5rem;
+    }
+
+    .offline-card {
+        width: min(100%, 760px);
+        background:
+            linear-gradient(135deg, rgba(255, 59, 107, 0.08), transparent 55%),
+            var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    .offline-header {
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+    }
+
+    .offline-status {
+        color: var(--danger);
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .offline-status::before {
+        content: '';
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--danger);
+        box-shadow: 0 0 18px rgba(255, 59, 107, 0.7);
+    }
+
+    .offline-body {
+        padding: 2.5rem 2rem;
+        display: grid;
+        gap: 1.5rem;
+    }
+
+    .offline-tag {
+        width: fit-content;
+    }
+
+    .offline-body h1 {
+        font-size: clamp(2rem, 5vw, 3.4rem);
+        line-height: 0.95;
+        letter-spacing: -0.04em;
+        max-width: 12ch;
+    }
+
+    .offline-body p {
+        max-width: 56ch;
+        color: var(--text-mid);
+        font-family: var(--font-mono);
+        font-size: 0.92rem;
+    }
+
+    .offline-note {
+        padding: 1rem 1.1rem;
+        border: 1px solid rgba(255, 170, 0, 0.25);
+        background: rgba(255, 170, 0, 0.06);
+        color: #ffd27a;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        border-radius: 8px;
+    }
+
+    .offline-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.9rem;
+        margin-top: 0.5rem;
+    }
+
+    .offline-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 180px;
+        padding: 0.95rem 1.2rem;
+        border-radius: var(--radius);
+        text-decoration: none;
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        transition: all 0.2s ease;
+    }
+
+    .offline-btn.primary {
+        background: var(--accent);
+        color: var(--bg);
+        border: 1px solid var(--accent);
+    }
+
+    .offline-btn.primary:hover {
+        background: #00b8cc;
+        border-color: #00b8cc;
+    }
+
+    .offline-btn.secondary {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--border);
+    }
+
+    .offline-btn.secondary:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+
+    @media (max-width: 640px) {
+        .offline-body {
+            padding: 2rem 1.25rem;
+        }
+
+        .offline-actions {
+            flex-direction: column;
+        }
+
+        .offline-btn {
+            width: 100%;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="offline-wrapper">
+    <article class="offline-card">
+        <div class="offline-header">
+            <span>Vision Access Control</span>
+            <span class="offline-status">Modo offline</span>
+        </div>
+
+        <div class="offline-body">
+            <span class="tag offline-tag">Sin conexión al servidor</span>
+            <h1>No se puede iniciar sesión mientras el sistema está offline.</h1>
+            <p>
+                Intentaste entrar cuando la base de datos principal no está disponible.
+                Como el modo offline no guarda usuarios ni valida credenciales, el inicio
+                de sesión queda deshabilitado hasta que vuelva la conexión con XAMPP/MySQL.
+            </p>
+
+            <div class="offline-note">
+                Verificá que XAMPP esté iniciado y que MySQL esté activo. Cuando la conexión
+                vuelva, podrás iniciar sesión normalmente.
+            </div>
+
+            <div class="offline-actions">
+                <a href="{{ url_for('main.login') }}" class="offline-btn primary">Reintentar acceso</a>
+                <a href="{{ url_for('main.index') }}" class="offline-btn secondary">Volver al inicio</a>
+            </div>
+        </div>
+    </article>
+</section>
+{% endblock %}
