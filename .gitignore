@@ -3,7 +3,6 @@ captures
 drowsy_cnn_model.keras
 scaler.save
 .venv
-iniciar_vision.bat
 __pycache__/
 *.pyc
 *.pyc.*
