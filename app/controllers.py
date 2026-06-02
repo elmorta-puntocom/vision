@@ -53,6 +53,11 @@ def index():
     return render_template('index.html')
 
 
+@bp.route('/comprar')
+def comprar():
+    return render_template('comprar.html')
+
+
 @bp.route('/register', methods=['GET', 'POST'])
 def register():
     if current_user.is_authenticated:

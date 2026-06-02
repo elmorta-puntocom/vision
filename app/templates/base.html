@@ -25,6 +25,8 @@
         .nav-links { display:flex; gap:1.5rem; align-items:center; }
         .nav-link { font-family:var(--font-mono); font-size:0.75rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-muted); text-decoration:none; transition:color 0.2s; }
         .nav-link:hover { color:var(--accent); }
+        .nav-link.buy { color:var(--accent); opacity:0.85; }
+        .nav-link.buy:hover { opacity:1; }
         .nav-btn { font-family:var(--font-mono); font-size:0.75rem; letter-spacing:0.1em; text-transform:uppercase; padding:0.5rem 1.2rem; border:1px solid var(--accent); color:var(--accent); background:transparent; text-decoration:none; cursor:pointer; transition:all 0.2s; border-radius:var(--radius); }
         .nav-btn:hover { background:var(--accent); color:var(--bg); }
         .nav-btn.filled { background:var(--accent); color:var(--bg); }
@@ -54,6 +56,7 @@
         VISION<span>_sys</span>
     </a>
     <div class="nav-links">
+        <a href="{{ url_for('main.comprar') }}" class="nav-link buy">Adquirir</a>
         <a href="{{ url_for('main.index') }}#producto" class="nav-link">Producto</a>
         <a href="{{ url_for('main.index') }}#tecnologia" class="nav-link">Tecnología</a>
         {% if current_user.is_authenticated %}

@@ -1,0 +1,833 @@
+{% extends 'base.html' %}
+
+{% block title %}Adquirir Vision — Seguridad Vial Inteligente{% endblock %}
+
+{% block extra_styles %}
+<style>
+    /* ── Layout general ── */
+    .buy-page {
+        padding: 6rem 5rem 5rem;
+        max-width: 1300px;
+        margin: 0 auto;
+    }
+
+    /* ── Encabezado ── */
+    .buy-hero {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 5rem;
+        align-items: start;
+        margin-bottom: 5rem;
+    }
+
+    .buy-hero-left .page-tag {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--accent);
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+    .buy-hero-left .page-tag::before {
+        content: '';
+        width: 28px;
+        height: 1px;
+        background: var(--accent);
+    }
+
+    .buy-hero-left h1 {
+        font-size: clamp(2.4rem, 4vw, 3.8rem);
+        font-weight: 800;
+        line-height: 1.05;
+        letter-spacing: -0.025em;
+        margin-bottom: 1.5rem;
+    }
+    .buy-hero-left h1 .hi { color: var(--accent); }
+
+    .buy-hero-left .tagline {
+        font-size: 0.95rem;
+        color: var(--text-mid);
+        line-height: 1.8;
+        max-width: 420px;
+        margin-bottom: 2.5rem;
+    }
+
+    /* ── Imágen / visual del producto ── */
+    .product-visual {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        aspect-ratio: 4/3;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .product-visual::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background:
+            repeating-linear-gradient(
+                45deg,
+                transparent,
+                transparent 28px,
+                rgba(0, 229, 255, 0.018) 28px,
+                rgba(0, 229, 255, 0.018) 29px
+            );
+    }
+
+    .product-visual::after {
+        content: '';
+        position: absolute;
+        bottom: -60px;
+        right: -60px;
+        width: 280px;
+        height: 280px;
+        background: radial-gradient(circle, rgba(0, 229, 255, 0.09) 0%, transparent 65%);
+        pointer-events: none;
+    }
+
+    .pv-badge {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--success);
+        border: 1px solid rgba(0,255,136,0.3);
+        padding: 0.3rem 0.7rem;
+        background: rgba(0,255,136,0.07);
+    }
+
+    .pv-icon {
+        position: relative;
+        z-index: 1;
+        margin-bottom: 1.5rem;
+    }
+
+    .pv-icon svg {
+        filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.35));
+    }
+
+    .pv-label {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        position: relative;
+        z-index: 1;
+    }
+
+    /* ── Precio + compra ── */
+    .price-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-top: 2px solid var(--accent);
+        padding: 2.5rem;
+        position: sticky;
+        top: 6rem;
+    }
+
+    .price-card-label {
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 1rem;
+    }
+
+    .price-main {
+        display: flex;
+        align-items: baseline;
+        gap: 0.4rem;
+        margin-bottom: 0.4rem;
+    }
+
+    .price-currency {
+        font-family: var(--font-mono);
+        font-size: 1.2rem;
+        color: var(--text-muted);
+        font-weight: 400;
+    }
+
+    .price-amount {
+        font-family: var(--font-mono);
+        font-size: 3rem;
+        font-weight: 700;
+        color: var(--text);
+        line-height: 1;
+        letter-spacing: -0.02em;
+    }
+
+    .price-period {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        margin-bottom: 1.5rem;
+    }
+
+    .price-divider {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 1.5rem 0;
+    }
+
+    /* Lista de incluye */
+    .includes-list {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-bottom: 2rem;
+    }
+
+    .includes-list li {
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        color: var(--text-mid);
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        line-height: 1.4;
+    }
+
+    .includes-list li .check {
+        color: var(--success);
+        flex-shrink: 0;
+        font-size: 0.8rem;
+    }
+
+    /* Cuotas */
+    .installments {
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        padding: 1rem;
+        margin-bottom: 1.75rem;
+        font-family: var(--font-mono);
+    }
+
+    .inst-title {
+        font-size: 0.6rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 0.6rem;
+    }
+
+    .inst-options {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+
+    .inst-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.72rem;
+    }
+
+    .inst-row .cuotas { color: var(--text-mid); }
+    .inst-row .valor  { color: var(--text); font-weight: 700; }
+    .inst-row .sin-interes { color: var(--success); font-size: 0.6rem; }
+
+    /* Botón MercadoPago */
+    .btn-mp {
+        width: 100%;
+        padding: 1.1rem 1.5rem;
+        background: #009ee3;
+        color: #fff;
+        border: none;
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        text-decoration: none;
+        border-radius: var(--radius);
+        margin-bottom: 0.75rem;
+    }
+
+    .btn-mp:hover { background: #007ab8; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,158,227,0.3); }
+
+    .btn-mp-secondary {
+        width: 100%;
+        padding: 0.9rem 1.5rem;
+        background: transparent;
+        color: var(--text-muted);
+        border: 1px solid var(--border);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.6rem;
+        border-radius: var(--radius);
+    }
+
+    .btn-mp-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+    .mp-disclaimer {
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        color: var(--text-muted);
+        text-align: center;
+        margin-top: 1rem;
+        line-height: 1.6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+    }
+
+    /* ── Sección especificaciones ── */
+    .specs-section {
+        margin-bottom: 4rem;
+    }
+
+    .section-divider {
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 2.5rem;
+    }
+    .section-divider::before { content: '//'; color: var(--accent); }
+    .section-divider::after  { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    .specs-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--border);
+    }
+
+    .spec-item {
+        background: var(--surface);
+        padding: 1.75rem;
+        transition: background 0.2s;
+    }
+    .spec-item:hover { background: var(--surface2); }
+
+    .spec-key {
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 0.5rem;
+    }
+
+    .spec-val {
+        font-family: var(--font-mono);
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+
+    .spec-sub {
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        margin-top: 0.2rem;
+        font-family: var(--font-mono);
+    }
+
+    /* ── Modalidades ── */
+    .plans-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.5px;
+        background: var(--border);
+        margin-bottom: 4rem;
+    }
+
+    .plan-card {
+        background: var(--surface);
+        padding: 2rem;
+        position: relative;
+        transition: background 0.2s;
+    }
+    .plan-card:hover { background: var(--surface2); }
+    .plan-card.featured {
+        background: rgba(0, 229, 255, 0.04);
+        border-top: 2px solid var(--accent);
+    }
+
+    .plan-badge {
+        position: absolute;
+        top: -1px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-family: var(--font-mono);
+        font-size: 0.55rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        background: var(--accent);
+        color: var(--bg);
+        padding: 0.2rem 0.75rem;
+        display: none;
+    }
+    .plan-card.featured .plan-badge { display: block; }
+
+    .plan-name {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.5rem;
+    }
+
+    .plan-title {
+        font-size: 1.1rem;
+        font-weight: 800;
+        margin-bottom: 0.75rem;
+        letter-spacing: -0.01em;
+    }
+
+    .plan-desc {
+        font-size: 0.8rem;
+        color: var(--text-mid);
+        line-height: 1.7;
+        font-family: var(--font-mono);
+        margin-bottom: 1.25rem;
+    }
+
+    .plan-price {
+        font-family: var(--font-mono);
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+    .plan-price span { font-size: 0.8rem; font-weight: 400; color: var(--text-muted); }
+
+    /* ── FAQ ── */
+    .faq-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        background: var(--border);
+        margin-bottom: 4rem;
+    }
+
+    .faq-item {
+        background: var(--surface);
+    }
+
+    .faq-question {
+        width: 100%;
+        background: none;
+        border: none;
+        color: var(--text);
+        font-family: var(--font-sans);
+        font-size: 0.95rem;
+        font-weight: 600;
+        text-align: left;
+        padding: 1.5rem;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        transition: color 0.2s;
+    }
+    .faq-question:hover { color: var(--accent); }
+
+    .faq-arrow {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        color: var(--accent);
+        flex-shrink: 0;
+        transition: transform 0.25s;
+    }
+    .faq-item.open .faq-arrow { transform: rotate(45deg); }
+
+    .faq-answer {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        color: var(--text-mid);
+        line-height: 1.8;
+        padding: 0 1.5rem 1.5rem;
+        display: none;
+    }
+    .faq-item.open .faq-answer { display: block; }
+
+    /* ── Banner final ── */
+    .buy-footer-banner {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent);
+        padding: 2rem 2.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 2rem;
+    }
+
+    .buy-footer-banner-text {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        color: var(--text-mid);
+        line-height: 1.7;
+    }
+
+    .buy-footer-banner-text strong {
+        color: var(--text);
+        display: block;
+        font-size: 0.9rem;
+        margin-bottom: 0.25rem;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+        .buy-page { padding: 5rem 1.5rem 3rem; }
+        .buy-hero { grid-template-columns: 1fr; gap: 2.5rem; }
+        .specs-grid,
+        .plans-grid { grid-template-columns: 1fr; }
+        .price-card { position: static; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="buy-page">
+
+    <!-- HERO -->
+    <div class="buy-hero">
+        <div class="buy-hero-left">
+            <div class="page-tag">Adquirí el sistema</div>
+            <h1>
+                VISION<br>
+                <span class="hi">Anti-somnolencia</span><br>
+                para conductores
+            </h1>
+            <p class="tagline">
+                Tecnología de visión artificial embebida en un dispositivo compacto. 
+                Detecta microsueños y cabeceos en tiempo real, activa alertas físicas 
+                y registra cada evento en tu historial privado.
+            </p>
+
+            <!-- Visual producto -->
+            <div class="product-visual">
+                <span class="pv-badge">Disponible</span>
+                <div class="pv-icon">
+                    <svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <!-- Cuerpo del dispositivo -->
+                        <rect x="18" y="28" width="60" height="40" rx="6" fill="#0d1318" stroke="#1e2d3d" stroke-width="1.5"/>
+                        <!-- Lente central -->
+                        <circle cx="48" cy="48" r="14" fill="#080c10" stroke="#00e5ff" stroke-width="1.5"/>
+                        <circle cx="48" cy="48" r="8"  fill="#080c10" stroke="rgba(0,229,255,0.4)" stroke-width="1"/>
+                        <circle cx="48" cy="48" r="3.5" fill="#00e5ff"/>
+                        <!-- LEDs IR -->
+                        <circle cx="30" cy="48" r="3" fill="#1e2d3d" stroke="#ff3b6b" stroke-width="1"/>
+                        <circle cx="66" cy="48" r="3" fill="#1e2d3d" stroke="#ff3b6b" stroke-width="1"/>
+                        <!-- Indicador LED superior -->
+                        <circle cx="48" cy="34" r="2.5" fill="#00ff88" opacity="0.9"/>
+                        <circle cx="48" cy="34" r="5"   fill="none" stroke="#00ff88" stroke-width="0.5" opacity="0.4"/>
+                        <!-- Conector inferior -->
+                        <rect x="42" y="68" width="12" height="4" rx="1" fill="#1e2d3d" stroke="#1e2d3d"/>
+                        <!-- Montaje / soporte -->
+                        <path d="M36 72 Q36 82 48 82 Q60 82 60 72" stroke="#1e2d3d" stroke-width="2" fill="none" stroke-linecap="round"/>
+                        <rect x="44" y="82" width="8" height="5" rx="1" fill="#1e2d3d"/>
+                        <!-- Texto grabado -->
+                        <text x="48" y="25" font-family="monospace" font-size="4" fill="rgba(0,229,255,0.35)" text-anchor="middle">VISION SYS v2</text>
+                    </svg>
+                </div>
+                <div class="pv-label">Vision Device — Unidad estándar</div>
+            </div>
+        </div>
+
+        <!-- Tarjeta de precio -->
+        <div>
+            <div class="price-card">
+                <div class="price-card-label">// Precio final al público</div>
+
+                <div class="price-main">
+                    <span class="price-currency">ARS $</span>
+                    <span class="price-amount">189.999</span>
+                </div>
+                <div class="price-period">Pago único — IVA incluido</div>
+
+                <hr class="price-divider">
+
+                <ul class="includes-list">
+                    <li><span class="check">✓</span> Dispositivo Vision hardware (cámara + ESP32)</li>
+                    <li><span class="check">✓</span> Software de IA pre-instalado</li>
+                    <li><span class="check">✓</span> Soporte de montaje para parabrisas</li>
+                    <li><span class="check">✓</span> Cable USB-C de alimentación (2m)</li>
+                    <li><span class="check">✓</span> Acceso a plataforma web 12 meses</li>
+                    <li><span class="check">✓</span> Activación del perfil del conductor</li>
+                    <li><span class="check">✓</span> Soporte técnico por e-mail</li>
+                </ul>
+
+                <!-- Cuotas -->
+                <div class="installments">
+                    <div class="inst-title">// Cuotas disponibles</div>
+                    <div class="inst-options">
+                        <div class="inst-row">
+                            <span class="cuotas">3 cuotas</span>
+                            <span class="valor">$ 63.333 / mes</span>
+                            <span class="sin-interes">SIN INTERÉS</span>
+                        </div>
+                        <div class="inst-row">
+                            <span class="cuotas">6 cuotas</span>
+                            <span class="valor">$ 34.999 / mes</span>
+                            <span class="sin-interes">SIN INTERÉS</span>
+                        </div>
+                        <div class="inst-row">
+                            <span class="cuotas">12 cuotas</span>
+                            <span class="valor">$ 19.166 / mes</span>
+                            <span class=""></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Botones -->
+                <a href="#" class="btn-mp" id="btnMercadoPago">
+                    <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
+                        <circle cx="16" cy="16" r="15" fill="#fff" opacity="0.15"/>
+                        <path d="M8 16c0-4.4 3.6-8 8-8s8 3.6 8 8" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+                        <path d="M11 19l2-3 3 2 3-5 3 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Pagar con Mercado Pago
+                </a>
+
+                <button class="btn-mp-secondary" onclick="alert('Próximamente: transferencia bancaria y depósito.')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>
+                    </svg>
+                    Otra forma de pago
+                </button>
+
+                <div class="mp-disclaimer">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                    Pago procesado de forma segura por Mercado Pago
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ESPECIFICACIONES TÉCNICAS -->
+    <div class="section-divider">Especificaciones técnicas</div>
+    <div class="specs-section">
+        <div class="specs-grid">
+            <div class="spec-item">
+                <div class="spec-key">Procesador de IA</div>
+                <div class="spec-val">MediaPipe Face Mesh</div>
+                <div class="spec-sub">468 landmarks faciales en tiempo real</div>
+            </div>
+            <div class="spec-item">
+                <div class="spec-key">Latencia de detección</div>
+                <div class="spec-val">&lt; 500 ms</div>
+                <div class="spec-sub">Desde captura hasta alerta activa</div>
+            </div>
+            <div class="spec-item">
+                <div class="spec-key">Umbral EAR</div>
+                <div class="spec-val">0.20</div>
+                <div class="spec-sub">Eye Aspect Ratio configurable</div>
+            </div>
+            <div class="spec-item">
+                <div class="spec-key">Umbral Pitch</div>
+                <div class="spec-val">30°</div>
+                <div class="spec-sub">Ángulo de cabeceo calibrado</div>
+            </div>
+            <div class="spec-item">
+                <div class="spec-key">Búfer pre-evento</div>
+                <div class="spec-val">10 segundos</div>
+                <div class="spec-sub">300 frames almacenados en RAM</div>
+            </div>
+            <div class="spec-item">
+                <div class="spec-key">Actuadores</div>
+                <div class="spec-val">Buzzer + Vibración</div>
+                <div class="spec-sub">ESP32 — alerta persistente</div>
+            </div>
+            <div class="spec-item">
+                <div class="spec-key">Visión nocturna</div>
+                <div class="spec-val">LEDs IR integrados</div>
+                <div class="spec-sub">Compatible con cámara IP Gadnic</div>
+            </div>
+            <div class="spec-item">
+                <div class="spec-key">Almacenamiento</div>
+                <div class="spec-val">SQLite + MySQL</div>
+                <div class="spec-sub">Offline-first con sincronización automática</div>
+            </div>
+            <div class="spec-item">
+                <div class="spec-key">Seguridad</div>
+                <div class="spec-val">Bcrypt + HTTPS</div>
+                <div class="spec-sub">Videos encriptados por perfil</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODALIDADES -->
+    <div class="section-divider">Modalidades de adquisición</div>
+    <div class="plans-grid">
+        <div class="plan-card">
+            <div class="plan-name">// Plan 01</div>
+            <div class="plan-title">Conductor Individual</div>
+            <p class="plan-desc">
+                Un dispositivo para uso personal. Ideal para conductores 
+                frecuentes, viajantes y profesionales independientes.
+            </p>
+            <div class="plan-price">$ 189.999 <span>unidad</span></div>
+        </div>
+        <div class="plan-card featured">
+            <div class="plan-badge">Más elegido</div>
+            <div class="plan-name">// Plan 02</div>
+            <div class="plan-title">Pack Duo</div>
+            <p class="plan-desc">
+                Dos dispositivos para uso familiar o pequeño negocio. 
+                Cada conductor gestiona su propio perfil privado.
+            </p>
+            <div class="plan-price">$ 349.999 <span>2 unidades</span></div>
+        </div>
+        <div class="plan-card">
+            <div class="plan-name">// Plan 03</div>
+            <div class="plan-title">Flota Empresarial</div>
+            <p class="plan-desc">
+                5 o más unidades con panel de gestión centralizado. 
+                Precio por unidad bonificado. Consultá por volumen.
+            </p>
+            <div class="plan-price">A consultar <span>desde 5 u.</span></div>
+        </div>
+    </div>
+
+    <!-- FAQ -->
+    <div class="section-divider">Preguntas frecuentes</div>
+    <div class="faq-list">
+        <div class="faq-item">
+            <button class="faq-question">
+                ¿El dispositivo funciona sin conexión a Internet?
+                <span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-answer">
+                Sí. Vision trabaja en modo offline por defecto. La detección, las alertas 
+                y el guardado de videos operan sin WiFi. Cuando la conexión se restablece, 
+                los eventos se sincronizan automáticamente con el servidor en segundo plano.
+            </div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-question">
+                ¿Qué teléfono o cámara necesito?
+                <span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-answer">
+                El sistema es compatible con cualquier smartphone Android o iOS con cámara 
+                frontal de al menos 720p, o con cámaras IP de la línea Gadnic (incluye 
+                soporte de visión nocturna infrarroja). No se requiere hardware adicional 
+                para la detección básica.
+            </div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-question">
+                ¿Mis videos de detección son privados?
+                <span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-answer">
+                Sí. Cada clip está vinculado exclusivamente a tu usuario mediante un ID 
+                encriptado. Nadie más —ni siquiera el administrador— puede acceder a tus 
+                registros sin tus credenciales. Las contraseñas se almacenan con hash 
+                Bcrypt + salt único.
+            </div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-question">
+                ¿Cómo instalo el dispositivo en el vehículo?
+                <span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-answer">
+                El kit incluye un soporte de succión para parabrisas. La instalación toma 
+                menos de 5 minutos: colocás el soporte, conectás el cable USB-C al encendedor 
+                o cargador y ejecutás la aplicación. El sistema calibra los umbrales del 
+                conductor de forma automática en los primeros 30 segundos.
+            </div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-question">
+                ¿Qué pasa si tengo algún problema técnico?
+                <span class="faq-arrow">+</span>
+            </button>
+            <div class="faq-answer">
+                El plan incluye soporte técnico por e-mail con respuesta en 48 horas hábiles. 
+                Para flotas empresariales ofrecemos soporte prioritario con SLA de 24 horas. 
+                El código fuente del software es auditabe por el cliente bajo acuerdo de 
+                confidencialidad.
+            </div>
+        </div>
+    </div>
+
+    <!-- BANNER CONTACTO -->
+    <div class="buy-footer-banner">
+        <div class="buy-footer-banner-text">
+            <strong>¿Gestionás una flota o tenés dudas antes de comprar?</strong>
+            Escribinos a <span style="color: var(--accent);">vision@itrt.edu.ar</span> — respondemos 
+            consultas técnicas y cotizaciones para empresas de transporte, remises y logística.
+        </div>
+        <a href="{{ url_for('main.register') }}" class="nav-btn filled" style="white-space: nowrap;">
+            Crear cuenta gratis
+        </a>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // FAQ accordion
+    document.querySelectorAll('.faq-question').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const item = btn.closest('.faq-item');
+            const wasOpen = item.classList.contains('open');
+            document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
+            if (!wasOpen) item.classList.add('open');
+        });
+    });
+
+    // Botón Mercado Pago — placeholder hasta integración real
+    document.getElementById('btnMercadoPago').addEventListener('click', function(e) {
+        e.preventDefault();
+        this.textContent = '⟳ Conectando con Mercado Pago...';
+        this.style.opacity = '0.7';
+        this.style.cursor = 'not-allowed';
+        setTimeout(() => {
+            this.innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
+                    <circle cx="16" cy="16" r="15" fill="#fff" opacity="0.15"/>
+                    <path d="M8 16c0-4.4 3.6-8 8-8s8 3.6 8 8" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+                    <path d="M11 19l2-3 3 2 3-5 3 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Pagar con Mercado Pago
+            `;
+            this.style.opacity = '';
+            this.style.cursor = '';
+            alert('Integración con Mercado Pago próximamente disponible.\nPodés contactarnos a vision@itrt.edu.ar para coordinar el pago.');
+        }, 1200);
+    });
+</script>
+{% endblock %}
