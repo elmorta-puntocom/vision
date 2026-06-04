@@ -96,7 +96,7 @@
     }
     .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
 
-    /* ── Eye diagram ── */
+    /* ── Product visual ── */
     .hero-visual {
         display: flex;
         justify-content: center;
@@ -104,6 +104,177 @@
         position: relative;
     }
 
+    .product-stage {
+        position: relative;
+        width: min(100%, 720px);
+        aspect-ratio: 1.05 / 1;
+        display: grid;
+        place-items: center;
+        isolation: isolate;
+        margin: 0 auto;
+    }
+
+    .product-stage::before {
+        content: '';
+        position: absolute;
+        inset: 12% 5% 8%;
+        border: 1px solid rgba(0,229,255,0.18);
+        background:
+            linear-gradient(90deg, transparent 49%, rgba(0,229,255,0.16) 50%, transparent 51%),
+            linear-gradient(0deg, transparent 49%, rgba(0,229,255,0.12) 50%, transparent 51%);
+        opacity: 0.55;
+        animation: scannerDrift 7s ease-in-out infinite;
+    }
+
+    .product-stage::after {
+        content: '';
+        position: absolute;
+        width: 82%;
+        height: 14%;
+        bottom: 9%;
+        background: rgba(0,229,255,0.14);
+        filter: blur(34px);
+        transform: perspective(420px) rotateX(64deg);
+        opacity: 0.5;
+        z-index: -1;
+    }
+
+    .product-device {
+        width: min(76%, 560px);
+        height: auto;
+        display: block;
+        object-fit: contain;
+        filter: drop-shadow(0 0 22px rgba(0,229,255,0.26)) drop-shadow(0 34px 40px rgba(0,0,0,0.55));
+        animation: deviceFloat 6s ease-in-out infinite;
+        transition: transform 0.35s ease, filter 0.35s ease;
+    }
+
+    .product-stage:hover .product-device {
+        transform: translateY(-10px) scale(1.025);
+        filter: drop-shadow(0 0 30px rgba(0,229,255,0.36)) drop-shadow(0 40px 48px rgba(0,0,0,0.6));
+    }
+
+    .product-halo {
+        position: absolute;
+        width: 64%;
+        aspect-ratio: 1;
+        border: 1px solid rgba(0,229,255,0.25);
+        border-radius: 50%;
+        box-shadow: 0 0 44px rgba(0,229,255,0.08), inset 0 0 34px rgba(0,229,255,0.08);
+        animation: haloPulse 3.4s ease-in-out infinite;
+        z-index: -1;
+    }
+
+    .feature-chip {
+        position: absolute;
+        width: clamp(168px, 24%, 210px);
+        padding: 0.8rem 0.95rem;
+        border: 1px solid var(--border);
+        background: rgba(13,19,24,0.86);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 18px 35px rgba(0,0,0,0.24);
+    }
+
+    .feature-chip::before {
+        content: '';
+        width: 7px;
+        height: 7px;
+        background: var(--accent);
+        position: absolute;
+        top: 1rem;
+        left: 1rem;
+        box-shadow: 0 0 14px rgba(0,229,255,0.8);
+    }
+
+    .feature-chip span {
+        display: block;
+        padding-left: 1.2rem;
+        font-family: var(--font-mono);
+        font-size: 0.56rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.35rem;
+    }
+
+    .feature-chip strong {
+        display: block;
+        padding-left: 1.2rem;
+        font-size: 0.74rem;
+        color: var(--text);
+        line-height: 1.35;
+    }
+
+    .chip-bio { top: 7%; left: 0; }
+    .chip-ia { top: 12%; right: 0; }
+    .chip-esp { bottom: 13%; left: 2%; }
+    .chip-events { bottom: 8%; right: 2%; }
+
+    @keyframes deviceFloat {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-14px); }
+    }
+
+    @keyframes haloPulse {
+        0%, 100% { transform: scale(1); opacity: 0.62; }
+        50% { transform: scale(1.08); opacity: 0.28; }
+    }
+
+    @keyframes scannerDrift {
+        0%, 100% { transform: translate3d(0, 0, 0); opacity: 0.45; }
+        50% { transform: translate3d(10px, -8px, 0); opacity: 0.7; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .product-device,
+        .product-halo,
+        .product-stage::before {
+            animation: none;
+        }
+    }
+
+    @media (max-width: 1100px) {
+        .feature-chip { width: clamp(160px, 27%, 190px); }
+        .product-device { width: min(72%, 520px); }
+    }
+
+    @media (max-width: 900px) {
+        .hero {
+            grid-template-columns: 1fr;
+            padding: 6rem 1.5rem 3rem;
+            gap: 2.5rem;
+        }
+        .hero-visual { min-height: auto; }
+        .feature-chip {
+            position: relative;
+            inset: auto;
+            width: auto;
+            min-width: 0;
+        }
+        .product-stage {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.75rem;
+            aspect-ratio: auto;
+            width: 100%;
+        }
+        .product-device,
+        .product-halo,
+        .product-stage::before,
+        .product-stage::after {
+            grid-column: 1 / -1;
+        }
+        .product-halo,
+        .product-stage::before,
+        .product-stage::after {
+            place-self: center;
+        }
+    }
+
+    @media (max-width: 560px) {
+        .product-stage { grid-template-columns: 1fr; }
+    }
+
+    /* ── Legacy eye diagram ── */
     .eye-ring {
         position: relative;
         width: 320px;
@@ -229,6 +400,105 @@
         font-weight: 800;
         letter-spacing: -0.02em;
         margin-top: 0.75rem;
+    }
+
+    .product-showcase {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.85fr) minmax(520px, 1.15fr);
+        gap: 3rem;
+        align-items: center;
+        background:
+            linear-gradient(135deg, rgba(0,229,255,0.045), transparent 34%),
+            var(--surface);
+        border: 1px solid var(--border);
+        padding: 3rem;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .product-showcase::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(90deg, transparent, transparent 34px, rgba(0,229,255,0.018) 34px, rgba(0,229,255,0.018) 35px);
+        pointer-events: none;
+    }
+
+    .showcase-copy,
+    .showcase-media { position: relative; z-index: 1; }
+
+    .showcase-media {
+        overflow: visible;
+        padding: 1rem 0;
+    }
+
+    .showcase-copy p {
+        color: var(--text-mid);
+        font-size: 0.95rem;
+        line-height: 1.8;
+        max-width: 640px;
+        margin-top: 1rem;
+    }
+
+    .showcase-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--border);
+        margin-top: 2rem;
+    }
+
+    .showcase-list div {
+        background: rgba(8,12,16,0.62);
+        padding: 1rem;
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        color: var(--text-mid);
+        letter-spacing: 0.04em;
+    }
+
+    .showcase-list span {
+        color: var(--accent);
+        display: block;
+        font-size: 0.58rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        margin-bottom: 0.35rem;
+    }
+
+    .showcase-media img {
+        width: 100%;
+        display: block;
+        object-fit: contain;
+        filter: drop-shadow(0 0 24px rgba(0,229,255,0.2));
+        transition: transform 0.35s ease;
+    }
+
+    .product-showcase:hover .showcase-media img {
+        transform: scale(1.025);
+    }
+
+    .showcase-media .product-device {
+        width: min(76%, 560px);
+    }
+
+    .acquisition-strip {
+        margin-top: 1.5rem;
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent);
+        background: var(--surface);
+        padding: 1.5rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1.5rem;
+    }
+
+    .acquisition-strip p {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        color: var(--text-mid);
+        line-height: 1.7;
     }
 
     /* ── Cards ── */
@@ -385,6 +655,24 @@
         color: var(--text-muted);
         line-height: 1.6;
     }
+
+    @media (max-width: 900px) {
+        .section { padding: 4rem 1.5rem; }
+        .stats-bar { margin: 0 1.5rem; grid-template-columns: 1fr; }
+        .stat { border-right: none; border-bottom: 1px solid var(--border); }
+        .stat:last-child { border-bottom: none; }
+        .product-showcase,
+        .cta-section {
+            grid-template-columns: 1fr;
+        }
+        .pipeline { grid-template-columns: 1fr; }
+        .acquisition-strip { align-items: flex-start; flex-direction: column; }
+    }
+
+    @media (max-width: 560px) {
+        .product-showcase { padding: 1.5rem; }
+        .showcase-list { grid-template-columns: 1fr; }
+    }
 </style>
 {% endblock %}
 
@@ -451,8 +739,62 @@
 
 <!-- PRODUCTO -->
 <section class="section" id="producto">
+    <div class="product-showcase">
+        <div class="showcase-copy">
+            <span class="tag">Dispositivo Vision</span>
+            <h2 class="section-title">Vigilancia inteligente para prevenir accidentes antes de que ocurran</h2>
+            <p>
+                Vision es una unidad compacta de seguridad vial que combina cámara, análisis biométrico e integración con ESP32 para detectar señales tempranas de fatiga. Su propósito es asistir al conductor en el momento crítico: cuando los párpados, la postura o el cabeceo anticipan un riesgo real.
+            </p>
+            <p>
+                La plataforma registra eventos de forma privada, mantiene trazabilidad para auditorías y ofrece una experiencia pensada tanto para conductores individuales como para flotas que necesitan prevención, evidencia y continuidad operativa.
+            </p>
+            <div class="showcase-list">
+                <div><span>01</span>Monitoreo biométrico continuo</div>
+                <div><span>02</span>Sistema preventivo de accidentes</div>
+                <div><span>03</span>Inteligencia artificial embarcada</div>
+                <div><span>04</span>Registro seguro de eventos</div>
+            </div>
+        </div>
+        <div class="showcase-media">
+            <div class="product-stage">
+                <div class="product-halo"></div>
+                <img
+                    class="product-device"
+                    src="{{ url_for('static', filename='img/vision-device.png') }}"
+                    alt="Producto Vision con lente central e iluminación cyber-tech"
+                >
+                <div class="feature-chip chip-bio">
+                    <span>Biometría</span>
+                    <strong>Monitoreo ocular continuo</strong>
+                </div>
+                <div class="feature-chip chip-ia">
+                    <span>IA embarcada</span>
+                    <strong>Detección de somnolencia en tiempo real</strong>
+                </div>
+                <div class="feature-chip chip-esp">
+                    <span>ESP32</span>
+                    <strong>Alertas físicas persistentes</strong>
+                </div>
+                <div class="feature-chip chip-events">
+                    <span>Registro seguro</span>
+                    <strong>Evidencia privada por evento</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="acquisition-strip">
+        <p>
+            Vision puede adquirirse como unidad individual, pack para múltiples conductores o solución de flota con soporte de implementación.
+        </p>
+        <a href="{{ url_for('main.comprar') }}" class="btn-primary">Adquirir Vision</a>
+    </div>
+</section>
+
+<!-- PILARES -->
+<section class="section">
     <div class="section-header">
-        <span class="tag">El problema</span>
+        <span class="tag">Arquitectura preventiva</span>
         <h2 class="section-title">Un sistema de 4 pilares</h2>
     </div>
 

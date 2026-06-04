@@ -117,6 +117,27 @@
         filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.35));
     }
 
+    .pv-image {
+        position: relative;
+        z-index: 1;
+        width: min(92%, 520px);
+        height: auto;
+        object-fit: contain;
+        filter: drop-shadow(0 0 24px rgba(0, 229, 255, 0.24)) drop-shadow(0 28px 38px rgba(0,0,0,0.55));
+        animation: productBreathe 5s ease-in-out infinite;
+        transition: transform 0.3s ease, filter 0.3s ease;
+    }
+
+    .product-visual:hover .pv-image {
+        transform: translateY(-6px) scale(1.02);
+        filter: drop-shadow(0 0 32px rgba(0, 229, 255, 0.34)) drop-shadow(0 34px 42px rgba(0,0,0,0.6));
+    }
+
+    @keyframes productBreathe {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-8px); }
+    }
+
     .pv-label {
         font-family: var(--font-mono);
         font-size: 0.7rem;
@@ -125,6 +146,36 @@
         color: var(--text-muted);
         position: relative;
         z-index: 1;
+    }
+
+    .buy-advantage-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--border);
+        margin-top: 1rem;
+    }
+
+    .buy-advantage {
+        background: var(--surface);
+        padding: 1rem;
+    }
+
+    .buy-advantage span {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.58rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.35rem;
+    }
+
+    .buy-advantage p {
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        color: var(--text-mid);
+        line-height: 1.55;
     }
 
     /* ── Precio + compra ── */
@@ -507,8 +558,13 @@
         .buy-page { padding: 5rem 1.5rem 3rem; }
         .buy-hero { grid-template-columns: 1fr; gap: 2.5rem; }
         .specs-grid,
-        .plans-grid { grid-template-columns: 1fr; }
+        .plans-grid,
+        .buy-advantage-grid { grid-template-columns: 1fr; }
         .price-card { position: static; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .pv-image { animation: none; }
     }
 </style>
 {% endblock %}
@@ -534,30 +590,26 @@
             <!-- Visual producto -->
             <div class="product-visual">
                 <span class="pv-badge">Disponible</span>
-                <div class="pv-icon">
-                    <svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <!-- Cuerpo del dispositivo -->
-                        <rect x="18" y="28" width="60" height="40" rx="6" fill="#0d1318" stroke="#1e2d3d" stroke-width="1.5"/>
-                        <!-- Lente central -->
-                        <circle cx="48" cy="48" r="14" fill="#080c10" stroke="#00e5ff" stroke-width="1.5"/>
-                        <circle cx="48" cy="48" r="8"  fill="#080c10" stroke="rgba(0,229,255,0.4)" stroke-width="1"/>
-                        <circle cx="48" cy="48" r="3.5" fill="#00e5ff"/>
-                        <!-- LEDs IR -->
-                        <circle cx="30" cy="48" r="3" fill="#1e2d3d" stroke="#ff3b6b" stroke-width="1"/>
-                        <circle cx="66" cy="48" r="3" fill="#1e2d3d" stroke="#ff3b6b" stroke-width="1"/>
-                        <!-- Indicador LED superior -->
-                        <circle cx="48" cy="34" r="2.5" fill="#00ff88" opacity="0.9"/>
-                        <circle cx="48" cy="34" r="5"   fill="none" stroke="#00ff88" stroke-width="0.5" opacity="0.4"/>
-                        <!-- Conector inferior -->
-                        <rect x="42" y="68" width="12" height="4" rx="1" fill="#1e2d3d" stroke="#1e2d3d"/>
-                        <!-- Montaje / soporte -->
-                        <path d="M36 72 Q36 82 48 82 Q60 82 60 72" stroke="#1e2d3d" stroke-width="2" fill="none" stroke-linecap="round"/>
-                        <rect x="44" y="82" width="8" height="5" rx="1" fill="#1e2d3d"/>
-                        <!-- Texto grabado -->
-                        <text x="48" y="25" font-family="monospace" font-size="4" fill="rgba(0,229,255,0.35)" text-anchor="middle">VISION SYS v2</text>
-                    </svg>
-                </div>
+                <img
+                    class="pv-image"
+                    src="{{ url_for('static', filename='img/vision-device.png') }}"
+                    alt="Dispositivo Vision Anti-somnolencia"
+                >
                 <div class="pv-label">Vision Device — Unidad estándar</div>
+            </div>
+            <div class="buy-advantage-grid">
+                <div class="buy-advantage">
+                    <span>Prevención</span>
+                    <p>Detección temprana de somnolencia, cabeceo y pérdida de atención.</p>
+                </div>
+                <div class="buy-advantage">
+                    <span>Integración</span>
+                    <p>Compatible con plataforma Flask, perfiles privados y actuación ESP32.</p>
+                </div>
+                <div class="buy-advantage">
+                    <span>Evidencia</span>
+                    <p>Registro seguro de eventos para trazabilidad individual o de flota.</p>
+                </div>
             </div>
         </div>
 

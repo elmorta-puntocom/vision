@@ -73,6 +73,67 @@
         background: var(--accent);
     }
 
+    .device-banner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 220px;
+        align-items: center;
+        gap: 2rem;
+        background:
+            linear-gradient(90deg, rgba(0,229,255,0.045), transparent 52%),
+            var(--surface);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent);
+        padding: 1.5rem 2rem;
+        margin-bottom: 2rem;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .device-banner::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(90deg, transparent, transparent 32px, rgba(0,229,255,0.018) 32px, rgba(0,229,255,0.018) 33px);
+        pointer-events: none;
+    }
+
+    .device-banner-copy,
+    .device-banner-media {
+        position: relative;
+        z-index: 1;
+    }
+
+    .device-banner-kicker {
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.45rem;
+    }
+
+    .device-banner-title {
+        font-size: 1.1rem;
+        font-weight: 800;
+        margin-bottom: 0.4rem;
+    }
+
+    .device-banner-copy p {
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        color: var(--text-mid);
+        line-height: 1.7;
+        max-width: 620px;
+    }
+
+    .device-banner-media img {
+        width: 100%;
+        display: block;
+        object-fit: contain;
+        filter: drop-shadow(0 0 18px rgba(0,229,255,0.22));
+        opacity: 0.92;
+    }
+
     /* Alerta de sincronización pendiente */
     .sync-banner {
         display: flex;
@@ -308,6 +369,24 @@
         height: 1px;
         background: var(--border);
     }
+
+    @media (max-width: 900px) {
+        .dashboard { padding: 5rem 1.5rem 3rem; }
+        .dash-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1.5rem;
+        }
+        .dash-actions { align-items: flex-start; }
+        .device-banner,
+        .dash-stats,
+        .account-fields {
+            grid-template-columns: 1fr;
+        }
+        .device-banner-media {
+            max-width: 260px;
+        }
+    }
 </style>
 {% endblock %}
 
@@ -328,6 +407,22 @@
                 Panel admin
             </a>
             {% endif %}
+        </div>
+    </div>
+
+    <div class="device-banner">
+        <div class="device-banner-copy">
+            <div class="device-banner-kicker">// Vision Device enlazado</div>
+            <div class="device-banner-title">Monitoreo preventivo preparado para registrar eventos críticos</div>
+            <p>
+                La plataforma centraliza detecciones de somnolencia, evidencia de video y estado de sincronización del dispositivo sin exponer datos privados del conductor.
+            </p>
+        </div>
+        <div class="device-banner-media">
+            <img
+                src="{{ url_for('static', filename='img/vision-device.png') }}"
+                alt="Dispositivo Vision conectado al dashboard"
+            >
         </div>
     </div>
 
