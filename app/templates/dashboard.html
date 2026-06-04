@@ -37,6 +37,42 @@
         color: var(--text-muted);
     }
 
+    .dash-actions {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 0.75rem;
+    }
+
+    .dash-action-btn {
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--bg);
+        background: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: var(--radius);
+        padding: 0.65rem 1rem;
+        text-decoration: none;
+        transition: all 0.2s;
+    }
+
+    .dash-action-btn:hover {
+        color: var(--accent);
+        background: transparent;
+    }
+
+    .dash-action-btn.outline {
+        color: var(--accent);
+        background: transparent;
+    }
+
+    .dash-action-btn.outline:hover {
+        color: var(--bg);
+        background: var(--accent);
+    }
+
     /* Alerta de sincronización pendiente */
     .sync-banner {
         display: flex;
@@ -282,7 +318,17 @@
             <div class="dash-greeting">// Bienvenido/a de vuelta</div>
             <h1 class="dash-title">{{ current_user.nombre }} {{ current_user.apellido }}</h1>
         </div>
-        <div class="dash-meta">{{ current_user.email }}</div>
+        <div class="dash-actions">
+            <div class="dash-meta">{{ current_user.email }}</div>
+            <a class="dash-action-btn" href="{{ url_for('main.editar_usuario', user_id=current_user.id) }}">
+                Modificar usuario
+            </a>
+            {% if current_user.has_role('Administrador') %}
+            <a class="dash-action-btn outline" href="{{ url_for('main.admin_base_datos') }}">
+                Panel admin
+            </a>
+            {% endif %}
+        </div>
     </div>
 
     <!-- Banner de sincronización -->

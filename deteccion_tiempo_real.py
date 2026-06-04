@@ -1,8 +1,12 @@
 from collections import Counter, deque
+from collections import Counter, deque
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import sys
+import tempfile
 import time
+import zipfile
 
 import cv2
 import joblib
@@ -42,13 +46,21 @@ DESPIERTO_THRESHOLD = 0.50
 SMOOTHING_WINDOW = 12
 LOG_EVERY_N_FRAMES = 10
 
-# Eye closure thresholds. Tune these per camera/lighting if needed, but keep
-# the temporal gate: a single blink should never become a drowsiness event.
-EAR_CLOSED_THRESHOLD = 0.20
-EAR_PARTIAL_THRESHOLD = 0.26
-EYE_CLOSED_SECONDS_THRESHOLD = 1.50
-EYE_PARTIAL_SECONDS_THRESHOLD = 2.50
-NORMAL_BLINK_MAX_SECONDS = 0.35
+# Head nod detection is intentionally conservative. The TensorFlow model can be
+# noisy on frontal faces, so cabeceo requires model confidence, pitch movement,
+# and time instead of a single-frame prediction.
+HEAD_DROWSY_PROB_THRESHOLD = 0.78
+HEAD_PITCH_DELTA_THRESHOLD = 18.0
+HEAD_DROWSY_SECONDS_THRESHOLD = 1.20
+HEAD_NEUTRAL_ALPHA = 0.04
+
+# Eye closure thresholds. The closed-eye alert is fast because in driving a
+# closure longer than a normal blink already matters.
+EAR_CLOSED_THRESHOLD = 0.22
+EAR_PARTIAL_THRESHOLD = 0.28
+EYE_CLOSED_SECONDS_THRESHOLD = 0.50
+EYE_PARTIAL_SECONDS_THRESHOLD = 1.20
+NORMAL_BLINK_MAX_SECONDS = 0.30
 
 sys.path.insert(0, str(MODEL_DIR))
 from model.biometrics import calculate_eye_aspect_ratio, estimate_head_pitch # noqa: E402
@@ -87,6 +99,16 @@ class EyeEvidence:
     state: str
     closed_seconds: float
     partial_seconds: float
+    is_drowsy: bool
+    confidence: float
+
+
+@dataclass
+class HeadEvidence:
+    pitch: float | None
+    neutral_pitch: float | None
+    pitch_delta: float | None
+    drowsy_seconds: float
     is_drowsy: bool
     confidence: float
 
@@ -182,6 +204,67 @@ class EyeClosureTracker:
             state=state,
             closed_seconds=closed_seconds,
             partial_seconds=partial_seconds,
+            is_drowsy=is_drowsy,
+            confidence=float(confidence),
+        )
+
+
+class HeadNodTracker:
+    """Requires sustained model and pitch evidence before reporting cabeceo."""
+
+    def __init__(
+        self,
+        probability_threshold=HEAD_DROWSY_PROB_THRESHOLD,
+        pitch_delta_threshold=HEAD_PITCH_DELTA_THRESHOLD,
+        seconds_threshold=HEAD_DROWSY_SECONDS_THRESHOLD,
+        neutral_alpha=HEAD_NEUTRAL_ALPHA,
+    ):
+        self.probability_threshold = probability_threshold
+        self.pitch_delta_threshold = pitch_delta_threshold
+        self.seconds_threshold = seconds_threshold
+        self.neutral_alpha = neutral_alpha
+        self.neutral_pitch = None
+        self.drowsy_started_at = None
+
+    def clear(self):
+        self.drowsy_started_at = None
+
+    def update(self, head_pitch, somnolencia_probability, now):
+        if head_pitch is None:
+            self.clear()
+            return HeadEvidence(None, self.neutral_pitch, None, 0.0, False, 0.0)
+
+        if self.neutral_pitch is None:
+            self.neutral_pitch = float(head_pitch)
+
+        pitch_delta = float(head_pitch - self.neutral_pitch)
+        strong_model_signal = somnolencia_probability >= self.probability_threshold
+        strong_pitch_signal = abs(pitch_delta) >= self.pitch_delta_threshold
+        candidate = strong_model_signal and strong_pitch_signal
+
+        if candidate:
+            if self.drowsy_started_at is None:
+                self.drowsy_started_at = now
+        else:
+            self.clear()
+            self.neutral_pitch = (
+                (1.0 - self.neutral_alpha) * self.neutral_pitch
+                + self.neutral_alpha * float(head_pitch)
+            )
+
+        drowsy_seconds = 0.0 if self.drowsy_started_at is None else now - self.drowsy_started_at
+        is_drowsy = candidate and drowsy_seconds >= self.seconds_threshold
+
+        probability_score = min(1.0, somnolencia_probability / self.probability_threshold)
+        pitch_score = min(1.0, abs(pitch_delta) / self.pitch_delta_threshold)
+        time_score = min(1.0, drowsy_seconds / self.seconds_threshold)
+        confidence = probability_score * pitch_score * time_score if candidate else 0.0
+
+        return HeadEvidence(
+            pitch=float(head_pitch),
+            neutral_pitch=float(self.neutral_pitch),
+            pitch_delta=pitch_delta,
+            drowsy_seconds=float(drowsy_seconds),
             is_drowsy=is_drowsy,
             confidence=float(confidence),
         )
@@ -385,6 +468,152 @@ def get_model_input_shape(model):
     return tuple(input_shape)
 
 
+def patch_keras3_model_config(value):
+    """Adapts Keras 3 model config keys for TensorFlow/Keras 2.x."""
+    patched = False
+
+    if isinstance(value, dict):
+        config = value.get("config")
+        if isinstance(config, dict) and "quantization_config" in config:
+            config.pop("quantization_config")
+            patched = True
+        if (
+            isinstance(config, dict)
+            and isinstance(config.get("dtype"), dict)
+            and config["dtype"].get("class_name") == "DTypePolicy"
+        ):
+            config.pop("dtype")
+            patched = True
+
+        if value.get("class_name") == "InputLayer":
+            config = value.get("config", {})
+            if "batch_shape" in config and "batch_input_shape" not in config:
+                config["batch_input_shape"] = config.pop("batch_shape")
+                patched = True
+            if "optional" in config:
+                config.pop("optional")
+                patched = True
+
+        for child in value.values():
+            patched = patch_keras3_model_config(child) or patched
+
+    elif isinstance(value, list):
+        for item in value:
+            patched = patch_keras3_model_config(item) or patched
+
+    return patched
+
+
+def make_keras2_compatible_copy(model_path):
+    """Creates a temporary .keras copy when the saved config comes from Keras 3."""
+    with zipfile.ZipFile(model_path, "r") as source:
+        config = json.loads(source.read("config.json"))
+        patched = patch_keras3_model_config(config)
+
+        if not patched:
+            return None
+
+        temp_file = tempfile.NamedTemporaryFile(suffix=".keras", delete=False)
+        temp_path = Path(temp_file.name)
+        temp_file.close()
+
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for item_name in source.namelist():
+                if item_name == "config.json":
+                    target.writestr(item_name, json.dumps(config))
+                else:
+                    target.writestr(item_name, source.read(item_name))
+
+    return temp_path
+
+
+def build_layer_from_config(layer_data):
+    class_name = layer_data.get("class_name")
+    config = layer_data.get("config", {})
+    name = config.get("name")
+
+    if class_name == "Dense":
+        return tf.keras.layers.Dense(
+            units=config["units"],
+            activation=config.get("activation"),
+            use_bias=config.get("use_bias", True),
+            name=name,
+        )
+
+    if class_name == "Dropout":
+        return tf.keras.layers.Dropout(
+            rate=config["rate"],
+            noise_shape=config.get("noise_shape"),
+            seed=config.get("seed"),
+            name=name,
+        )
+
+    raise ValueError(f"Capa no soportada para carga manual: {class_name}")
+
+
+def load_keras3_weights_manually(model_path):
+    """Rebuilds the simple Sequential model and loads Keras 3 .keras weights."""
+    import h5py
+
+    weights_path = None
+    try:
+        with zipfile.ZipFile(model_path, "r") as source:
+            config = json.loads(source.read("config.json"))
+            layers_config = config["config"]["layers"]
+            input_config = layers_config[0]["config"]
+            batch_shape = input_config.get("batch_shape") or input_config.get("batch_input_shape")
+            if not batch_shape or len(batch_shape) < 2:
+                raise ValueError("No se pudo leer el input_shape del modelo.")
+
+            model = tf.keras.Sequential(name=config["config"].get("name", "sequential"))
+            model.add(tf.keras.layers.Input(shape=tuple(batch_shape[1:]), name=input_config.get("name")))
+
+            for layer_data in layers_config[1:]:
+                model.add(build_layer_from_config(layer_data))
+
+            temp_file = tempfile.NamedTemporaryFile(suffix=".h5", delete=False)
+            weights_path = Path(temp_file.name)
+            temp_file.write(source.read("model.weights.h5"))
+            temp_file.close()
+
+        with h5py.File(weights_path, "r") as weights_file:
+            for layer in model.layers:
+                layer_weights = weights_file.get(f"layers/{layer.name}/vars")
+                if layer_weights is None or len(layer_weights.keys()) == 0:
+                    continue
+
+                ordered_keys = sorted(layer_weights.keys(), key=lambda key: int(key))
+                layer.set_weights([np.asarray(layer_weights[key]) for key in ordered_keys])
+
+        return model
+    finally:
+        if weights_path is not None:
+            weights_path.unlink(missing_ok=True)
+
+
+def load_keras_model_compatible(model_path):
+    try:
+        return tf.keras.models.load_model(model_path, compile=False)
+    except Exception as original_exc:
+        compatible_path = None
+        try:
+            compatible_path = make_keras2_compatible_copy(model_path)
+            if compatible_path is None:
+                raise original_exc
+
+            print("[INIT] Modelo .keras convertido temporalmente para TensorFlow/Keras 2.x.")
+            return tf.keras.models.load_model(compatible_path, compile=False)
+        except Exception as compatible_exc:
+            try:
+                print("[INIT] Reconstruyendo modelo .keras manualmente para compatibilidad.")
+                return load_keras3_weights_manually(model_path)
+            except Exception as manual_exc:
+                raise RuntimeError(f"No se pudo cargar el modelo TensorFlow: {model_path}") from manual_exc
+        finally:
+            if compatible_path is not None:
+                compatible_path.unlink(missing_ok=True)
+
+
 def expected_feature_count_from_assets(model, scaler):
     model_shape = get_model_input_shape(model)
     model_dims = [dim for dim in model_shape[1:] if dim is not None]
@@ -412,10 +641,7 @@ def expected_feature_count_from_assets(model, scaler):
 
 def load_runtime_assets():
     ensure_assets()
-    try:
-        model = tf.keras.models.load_model(MODEL_PATH)
-    except Exception as exc:
-        raise RuntimeError(f"No se pudo cargar el modelo TensorFlow: {MODEL_PATH}") from exc
+    model = load_keras_model_compatible(MODEL_PATH)
 
     try:
         scaler = joblib.load(SCALER_PATH)
@@ -587,15 +813,15 @@ def infer_state(model, model_input, interpreter):
     return predicted_label, confidence, probabilities, raw_output
 
 
-def combine_signals(smooth_label, smooth_confidence, smooth_probabilities, eye_evidence):
+def combine_signals(smooth_label, smooth_confidence, smooth_probabilities, eye_evidence, head_evidence):
     """Combine the existing TensorFlow signal with direct EAR evidence."""
-    head_drowsy = smooth_label == LABEL_SOMNOLENCIA
+    head_drowsy = head_evidence.is_drowsy
     eye_drowsy = eye_evidence.is_drowsy
 
     if head_drowsy and eye_drowsy:
         return DetectionDecision(
             state="Somnolencia crítica",
-            confidence=min(1.0, max(smooth_confidence, eye_evidence.confidence) + 0.15),
+            confidence=min(1.0, max(head_evidence.confidence, eye_evidence.confidence) + 0.15),
             head_drowsy=True,
             eye_drowsy=True,
         )
@@ -611,7 +837,7 @@ def combine_signals(smooth_label, smooth_confidence, smooth_probabilities, eye_e
     if head_drowsy:
         return DetectionDecision(
             state="Somnolencia por cabeceo",
-            confidence=smooth_probabilities[LABEL_SOMNOLENCIA],
+            confidence=head_evidence.confidence,
             head_drowsy=True,
             eye_drowsy=False,
         )
@@ -646,7 +872,7 @@ def log_prediction(
     smooth_label,
     smooth_confidence,
     eye_evidence,
-    head_pitch,
+    head_evidence,
     final_decision,
 ):
     if frame_index % LOG_EVERY_N_FRAMES != 0:
@@ -662,7 +888,9 @@ def log_prediction(
         f"EAR={format_metric(eye_evidence.ear)} | ojos={eye_evidence.state} | "
         f"t_cerrado={eye_evidence.closed_seconds:.2f}s | "
         f"t_parcial={eye_evidence.partial_seconds:.2f}s | "
-        f"pitch={format_metric(head_pitch, suffix=' deg')} | "
+        f"pitch={format_metric(head_evidence.pitch, suffix=' deg')} | "
+        f"delta_pitch={format_metric(head_evidence.pitch_delta, suffix=' deg')} | "
+        f"t_cabeceo={head_evidence.drowsy_seconds:.2f}s | "
         f"estado_final={final_decision.state} | confianza_final={final_decision.confidence:.4f}"
     )
 
@@ -691,7 +919,7 @@ def render_status(
     confidence=None,
     probabilities=None,
     eye_evidence=None,
-    head_pitch=None,
+    head_evidence=None,
     model_available=False,
 ):
     if estado == "No hay rostro":
@@ -737,7 +965,14 @@ def render_status(
             f"Parcial: {eye_evidence.partial_seconds:.2f}s"
         )
 
-    pitch_detail = f"Angulo cabeza: {format_metric(head_pitch, suffix=' deg')}"
+    if head_evidence is None:
+        pitch_detail = "Cabeza: pitch N/A | delta N/A | t 0.00s"
+    else:
+        pitch_detail = (
+            f"Cabeza: pitch {format_metric(head_evidence.pitch, suffix=' deg')} | "
+            f"delta {format_metric(head_evidence.pitch_delta, suffix=' deg')} | "
+            f"t {head_evidence.drowsy_seconds:.2f}s"
+        )
 
     status_lines = (model_detail, confidence_detail, ear_detail, eye_detail, pitch_detail)
     for line_index, detail in enumerate(status_lines, start=1):
@@ -765,6 +1000,7 @@ def run_realtime_detection():
     cap = open_camera(0)
     smoother = PredictionSmoother()
     eye_tracker = EyeClosureTracker()
+    head_tracker = HeadNodTracker()
 
     mp_holistic = mp.solutions.holistic
     mp_drawing = mp.solutions.drawing_utils
@@ -798,6 +1034,7 @@ def run_realtime_detection():
             ear_result = calculate_eye_aspect_ratio(results.face_landmarks) if face_detected else None
             eye_evidence = eye_tracker.update(ear_result, now) if face_detected else eye_tracker.update(None, now)
             head_pitch = estimate_head_pitch(results.face_landmarks, frame.shape) if face_detected else None
+            head_evidence = head_tracker.update(head_pitch, 0.0, now) if face_detected else head_tracker.update(None, 0.0, now)
 
             estado = "No hay rostro"
             confidence = None
@@ -810,24 +1047,27 @@ def run_realtime_detection():
             if not face_detected:
                 # Do not reuse stale predictions when the face is gone.
                 smoother.clear()
+                head_tracker.clear()
                 render_status(
                     frame,
                     estado,
                     confidence,
                     probabilities,
                     eye_evidence,
-                    head_pitch,
+                    head_evidence,
                     model_available=False,
                 )
             else:
                 if values is None:
                     # EAR can still work with a face only; the model requires pose too.
                     smoother.clear()
+                    head_tracker.clear()
                     decision = combine_signals(
                         smooth_label,
                         0.0,
                         smooth_probabilities,
                         eye_evidence,
+                        head_evidence,
                     )
                     render_status(
                         frame,
@@ -835,7 +1075,7 @@ def run_realtime_detection():
                         decision.confidence,
                         smooth_probabilities,
                         eye_evidence,
-                        head_pitch,
+                        head_evidence,
                         model_available=False,
                     )
                 else:
@@ -843,11 +1083,17 @@ def run_realtime_detection():
                         model_input = preprocess_landmarks(values, scaler, model, expected_features)
                         raw_label, raw_confidence, probabilities, _ = infer_state(model, model_input, interpreter)
                         smooth_label, smooth_confidence, smooth_probabilities = smoother.update(probabilities)
+                        head_evidence = head_tracker.update(
+                            head_pitch,
+                            smooth_probabilities[LABEL_SOMNOLENCIA],
+                            now,
+                        )
                         decision = combine_signals(
                             smooth_label,
                             smooth_confidence,
                             smooth_probabilities,
                             eye_evidence,
+                            head_evidence,
                         )
                         render_status(
                             frame,
@@ -855,7 +1101,7 @@ def run_realtime_detection():
                             decision.confidence,
                             smooth_probabilities,
                             eye_evidence,
-                            head_pitch,
+                            head_evidence,
                             model_available=True,
                         )
                         log_prediction(
@@ -867,17 +1113,19 @@ def run_realtime_detection():
                             smooth_label,
                             smooth_confidence,
                             eye_evidence,
-                            head_pitch,
+                            head_evidence,
                             decision,
                         )
                     except Exception as exc:
                         smoother.clear()
+                        head_tracker.clear()
                         print(f"[ERROR] Inferencia omitida: {exc}")
                         decision = combine_signals(
                             LABEL_DESPIERTO,
                             0.0,
                             empty_probabilities(),
                             eye_evidence,
+                            head_evidence,
                         )
                         render_status(
                             frame,
@@ -885,7 +1133,7 @@ def run_realtime_detection():
                             decision.confidence,
                             empty_probabilities(),
                             eye_evidence,
-                            head_pitch,
+                            head_evidence,
                             model_available=False,
                         )
 

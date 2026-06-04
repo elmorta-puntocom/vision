@@ -1,0 +1,316 @@
+{% extends 'base.html' %}
+
+{% block title %}Panel admin — Vision{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .admin-page {
+        max-width: 1320px;
+        padding: 5rem;
+    }
+
+    .admin-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 2rem;
+        margin-bottom: 2.5rem;
+    }
+
+    .admin-kicker {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.5rem;
+    }
+
+    .admin-header h1 {
+        font-size: 2rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+    }
+
+    .admin-session {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text-mid);
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        min-width: 300px;
+        padding: 1rem;
+        text-align: right;
+    }
+
+    .admin-session strong {
+        color: var(--text);
+        display: block;
+        font-size: 0.85rem;
+        margin-bottom: 0.25rem;
+    }
+
+    .admin-stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--border);
+        margin-bottom: 2.5rem;
+    }
+
+    .admin-stat {
+        background: var(--surface);
+        padding: 1.75rem;
+    }
+
+    .admin-stat label {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 0.75rem;
+    }
+
+    .admin-stat strong {
+        color: var(--text);
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 2rem;
+        line-height: 1;
+    }
+
+    .section-label {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin: 2.5rem 0 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .section-label::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: var(--border);
+    }
+
+    .admin-table-wrap {
+        border: 1px solid var(--border);
+        overflow-x: auto;
+    }
+
+    .admin-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--surface);
+        min-width: 880px;
+    }
+
+    .admin-table th,
+    .admin-table td {
+        border-bottom: 1px solid var(--border);
+        font-family: var(--font-mono);
+        text-align: left;
+        vertical-align: middle;
+    }
+
+    .admin-table th {
+        color: var(--text-muted);
+        font-size: 0.6rem;
+        letter-spacing: 0.15em;
+        padding: 0.75rem 1rem;
+        text-transform: uppercase;
+    }
+
+    .admin-table td {
+        color: var(--text-mid);
+        font-size: 0.72rem;
+        padding: 0.85rem 1rem;
+    }
+
+    .admin-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .admin-table tr:hover td {
+        background: var(--surface2);
+    }
+
+    .user-name {
+        color: var(--text);
+        font-weight: 700;
+    }
+
+    .pill {
+        border: 1px solid rgba(0, 229, 255, 0.25);
+        color: var(--accent);
+        display: inline-block;
+        font-size: 0.58rem;
+        letter-spacing: 0.1em;
+        padding: 0.18rem 0.5rem;
+        text-transform: uppercase;
+    }
+
+    .score {
+        font-weight: 700;
+    }
+
+    .score.good { color: var(--success); }
+    .score.warn { color: var(--warning); }
+    .score.bad { color: var(--danger); }
+
+    .table-action {
+        color: var(--accent);
+        font-size: 0.65rem;
+        letter-spacing: 0.1em;
+        text-decoration: none;
+        text-transform: uppercase;
+    }
+
+    .table-action:hover {
+        text-decoration: underline;
+    }
+
+    .empty-state {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        padding: 2rem;
+        text-align: center;
+    }
+
+    @media (max-width: 820px) {
+        .admin-page {
+            padding: 2rem 1rem;
+        }
+
+        .admin-header {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .admin-session {
+            min-width: 0;
+            text-align: left;
+        }
+
+        .admin-stats {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="admin-page">
+    <div class="admin-header">
+        <div>
+            <div class="admin-kicker">// Base de datos</div>
+            <h1>Panel de administración</h1>
+        </div>
+        <div class="admin-session">
+            <strong>Sesión activa: {{ current_user.nombre }} {{ current_user.apellido }}</strong>
+            {{ current_user.email }} · ID #{{ current_user.id }}
+        </div>
+    </div>
+
+    <div class="admin-stats">
+        <div class="admin-stat">
+            <label>Usuarios registrados</label>
+            <strong>{{ total_usuarios }}</strong>
+        </div>
+        <div class="admin-stat">
+            <label>Detecciones totales</label>
+            <strong>{{ total_detecciones }}</strong>
+        </div>
+        <div class="admin-stat">
+            <label>Score promedio</label>
+            <strong>{{ "%.0f"|format(score_promedio) }}/100</strong>
+        </div>
+    </div>
+
+    <div class="section-label">Usuarios y métricas</div>
+    {% if usuarios_resumen %}
+    <div class="admin-table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Usuario</th>
+                    <th>E-mail</th>
+                    <th>Roles</th>
+                    <th>Detecciones</th>
+                    <th>Score</th>
+                    <th>Registro</th>
+                    <th>Acción</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in usuarios_resumen %}
+                {% set usuario = row.usuario %}
+                {% set score_class = 'good' if row.score >= 80 else ('warn' if row.score >= 50 else 'bad') %}
+                <tr>
+                    <td>#{{ usuario.id }}</td>
+                    <td class="user-name">{{ usuario.nombre }} {{ usuario.apellido }}</td>
+                    <td>{{ usuario.email }}</td>
+                    <td><span class="pill">{{ row.roles }}</span></td>
+                    <td>{{ row.detecciones }}</td>
+                    <td><span class="score {{ score_class }}">{{ "%.0f"|format(row.score) }}/100</span></td>
+                    <td>{{ usuario.fecha_registro.strftime('%d/%m/%Y') if usuario.fecha_registro else '—' }}</td>
+                    <td>
+                        <a class="table-action" href="{{ url_for('main.editar_usuario', user_id=usuario.id) }}">
+                            Editar
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">No hay usuarios registrados.</div>
+    {% endif %}
+
+    <div class="section-label">Últimas detecciones</div>
+    {% if ultimas_detecciones %}
+    <div class="admin-table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Usuario</th>
+                    <th>Fecha y hora</th>
+                    <th>Evento</th>
+                    <th>EAR</th>
+                    <th>Pitch</th>
+                    <th>Duración</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for det in ultimas_detecciones %}
+                <tr>
+                    <td>#{{ det.id }}</td>
+                    <td>{{ det.usuario.nombre }} {{ det.usuario.apellido }}</td>
+                    <td>{{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}</td>
+                    <td><span class="pill">{{ det.tipo_evento }}</span></td>
+                    <td>{{ "%.2f"|format(det.valor_ear) if det.valor_ear is not none else '—' }}</td>
+                    <td>{{ "%.1f"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}°</td>
+                    <td>{{ "%.1f"|format(det.duracion_alerta) if det.duracion_alerta is not none else '—' }}s</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">Todavía no hay detecciones registradas.</div>
+    {% endif %}
+</div>
+{% endblock %}

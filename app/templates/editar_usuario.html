@@ -1,0 +1,428 @@
+{% extends 'base.html' %}
+
+{% block title %}Modificar usuario — Vision{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .user-edit {
+        max-width: 960px;
+        padding: 5rem;
+    }
+
+    .edit-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 2rem;
+        margin-bottom: 2.5rem;
+    }
+
+    .edit-kicker {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.5rem;
+    }
+
+    .edit-header h1 {
+        font-size: 2rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+    }
+
+    .edit-meta {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        text-align: right;
+    }
+
+    .edit-panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        padding: 2.5rem;
+    }
+
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+    }
+
+    .form-group {
+        margin-bottom: 1.25rem;
+    }
+
+    .form-group.full {
+        grid-column: 1 / -1;
+    }
+
+    label,
+    legend {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 0.5rem;
+    }
+
+    input[type="text"],
+    input[type="email"],
+    input[type="password"] {
+        width: 100%;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+        outline: none;
+        padding: 0.8rem 1rem;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.12);
+    }
+
+    input.error {
+        border-color: var(--danger);
+    }
+
+    .help-text,
+    .error-text {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        margin-top: 0.45rem;
+    }
+
+    .help-text {
+        color: var(--text-muted);
+    }
+
+    .error-text {
+        min-height: 1rem;
+        color: var(--danger);
+    }
+
+    fieldset {
+        border: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .roles-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--border);
+    }
+
+    .role-option {
+        display: flex;
+        gap: 0.9rem;
+        align-items: flex-start;
+        background: var(--surface2);
+        cursor: pointer;
+        padding: 1rem;
+        margin: 0;
+        transition: background 0.2s;
+    }
+
+    .role-option:hover {
+        background: #14202a;
+    }
+
+    .role-option input {
+        width: 18px;
+        height: 18px;
+        margin-top: 0.15rem;
+        accent-color: var(--accent);
+    }
+
+    .role-option strong {
+        display: block;
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+    }
+
+    .role-option span span {
+        display: block;
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        margin-top: 0.2rem;
+    }
+
+    .form-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        margin-top: 2rem;
+    }
+
+    .btn {
+        border-radius: var(--radius);
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+        min-height: 44px;
+        padding: 0 1.2rem;
+        text-transform: uppercase;
+        transition: all 0.2s;
+    }
+
+    .btn-primary {
+        background: var(--accent);
+        border: 1px solid var(--accent);
+        color: var(--bg);
+    }
+
+    .btn-primary:hover {
+        background: transparent;
+        color: var(--accent);
+    }
+
+    .btn-secondary {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text-mid);
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+    }
+
+    .btn-secondary:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+
+    .save-status {
+        display: none;
+        border-left: 3px solid var(--success);
+        color: var(--success);
+        background: var(--surface2);
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        margin-top: 1.25rem;
+        padding: 0.85rem 1rem;
+    }
+
+    .save-status.visible {
+        display: block;
+    }
+
+    @media (max-width: 760px) {
+        .user-edit {
+            padding: 2rem 1rem;
+        }
+
+        .edit-header,
+        .form-actions {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .edit-meta {
+            text-align: left;
+        }
+
+        .form-grid,
+        .roles-list {
+            grid-template-columns: 1fr;
+        }
+
+        .edit-panel {
+            padding: 1.5rem;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="user-edit">
+    <div class="edit-header">
+        <div>
+            <div class="edit-kicker">// Gestión de usuarios</div>
+            <h1>Modificar usuario</h1>
+        </div>
+        <div class="edit-meta">ID #{{ usuario.id }} · modo edición</div>
+    </div>
+
+    <section class="edit-panel">
+        <form method="POST" action="{{ url_for('main.editar_usuario', user_id=usuario.id) }}" id="editUserForm" novalidate>
+            <div class="form-grid">
+                <div class="form-group full">
+                    <label for="nombre_apellido">Nombre y Apellido</label>
+                    <input
+                        type="text"
+                        id="nombre_apellido"
+                        name="nombre_apellido"
+                        value="{{ form_data.get('nombre_apellido', '') }}"
+                        class="{{ 'error' if errors.get('nombre_apellido') else '' }}"
+                        autocomplete="name"
+                        required
+                    >
+                    <span class="error-text" id="nombreError">{{ errors.get('nombre_apellido', '') }}</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="email">E-mail</label>
+                    <input
+                        type="email"
+                        id="email"
+                        name="email"
+                        value="{{ form_data.get('email', '') }}"
+                        class="{{ 'error' if errors.get('email') else '' }}"
+                        autocomplete="email"
+                    >
+                    <span class="help-text">Opcional. Si lo dejás vacío, se mantiene el actual.</span>
+                    <span class="error-text" id="emailError">{{ errors.get('email', '') }}</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Contraseña</label>
+                    <input
+                        type="password"
+                        id="password"
+                        name="password"
+                        class="{{ 'error' if errors.get('password') else '' }}"
+                        autocomplete="new-password"
+                        placeholder="Dejar vacío para no cambiar"
+                    >
+                    <span class="help-text">Mínimo 6 caracteres solo si se completa.</span>
+                    <span class="error-text" id="passwordError">{{ errors.get('password', '') }}</span>
+                </div>
+            </div>
+
+            <fieldset class="form-group full">
+                <legend>Roles</legend>
+                <div class="roles-list">
+                    {% for rol in roles_disponibles %}
+                    <label class="role-option" for="role_{{ rol.id }}">
+                        <input
+                            type="checkbox"
+                            id="role_{{ rol.id }}"
+                            name="roles"
+                            value="{{ rol.nombre }}"
+                            {% if rol.nombre in form_data.get('roles', []) %}checked{% endif %}
+                        >
+                        <span>
+                            <strong>{{ rol.nombre }}</strong>
+                            <span>
+                                {% if rol.nombre == 'Administrador' %}
+                                    Acceso completo al sistema.
+                                {% else %}
+                                    Acceso general de usuario común.
+                                {% endif %}
+                            </span>
+                        </span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <span class="error-text" id="rolesError">{{ errors.get('roles', '') }}</span>
+            </fieldset>
+
+            <div class="form-actions">
+                <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancelar</a>
+                <button class="btn btn-primary" type="submit">Guardar</button>
+            </div>
+
+            <div class="save-status" id="saveStatus">Validación correcta. Guardando cambios...</div>
+        </form>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const form = document.getElementById('editUserForm');
+    const fullName = document.getElementById('nombre_apellido');
+    const email = document.getElementById('email');
+    const password = document.getElementById('password');
+    const roles = document.querySelectorAll('input[name="roles"]');
+    const saveStatus = document.getElementById('saveStatus');
+
+    const messages = {
+        nombre: document.getElementById('nombreError'),
+        email: document.getElementById('emailError'),
+        password: document.getElementById('passwordError'),
+        roles: document.getElementById('rolesError')
+    };
+
+    function setError(input, messageElement, message) {
+        if (input) {
+            input.classList.toggle('error', Boolean(message));
+        }
+        messageElement.textContent = message;
+    }
+
+    function selectedRolesCount() {
+        return Array.from(roles).filter(role => role.checked).length;
+    }
+
+    function validateEditForm() {
+        let valid = true;
+        const fullNameValue = fullName.value.trim();
+        const hasNameAndSurname = fullNameValue.split(/\s+/).filter(Boolean).length >= 2;
+
+        setError(fullName, messages.nombre, '');
+        setError(email, messages.email, '');
+        setError(password, messages.password, '');
+        messages.roles.textContent = '';
+
+        if (!fullNameValue) {
+            setError(fullName, messages.nombre, 'El nombre y apellido son obligatorios.');
+            valid = false;
+        } else if (!hasNameAndSurname) {
+            setError(fullName, messages.nombre, 'Ingresá nombre y apellido.');
+            valid = false;
+        }
+
+        if (email.value.trim() && !email.validity.valid) {
+            setError(email, messages.email, 'Ingresá un e-mail válido.');
+            valid = false;
+        }
+
+        if (password.value && password.value.length < 6) {
+            setError(password, messages.password, 'La contraseña debe tener mínimo 6 caracteres.');
+            valid = false;
+        }
+
+        if (selectedRolesCount() === 0) {
+            messages.roles.textContent = 'Seleccioná al menos un rol.';
+            valid = false;
+        }
+
+        return valid;
+    }
+
+    form.addEventListener('submit', (event) => {
+        saveStatus.classList.remove('visible');
+        if (!validateEditForm()) {
+            event.preventDefault();
+            return;
+        }
+        saveStatus.classList.add('visible');
+    });
+
+    [fullName, email, password, ...roles].forEach(field => {
+        field.addEventListener('input', () => {
+            saveStatus.classList.remove('visible');
+            validateEditForm();
+        });
+        field.addEventListener('change', validateEditForm);
+    });
+</script>
+{% endblock %}

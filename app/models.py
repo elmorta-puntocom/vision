@@ -5,6 +5,30 @@ from flask_login import UserMixin
 from . import bcrypt, db
 
 
+usuario_roles = db.Table(
+    'usuario_roles',
+    db.Column(
+        'usuario_id',
+        db.Integer,
+        db.ForeignKey('usuarios.id', ondelete='CASCADE'),
+        primary_key=True,
+    ),
+    db.Column(
+        'rol_id',
+        db.Integer,
+        db.ForeignKey('roles.id', ondelete='CASCADE'),
+        primary_key=True,
+    ),
+)
+
+
+class Rol(db.Model):
+    __tablename__ = 'roles'
+
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(50), nullable=False, unique=True)
+
+
 class Usuario(UserMixin, db.Model):
     __tablename__ = 'usuarios'
 
@@ -27,12 +51,21 @@ class Usuario(UserMixin, db.Model):
         uselist=False,
         cascade='all, delete-orphan',
     )
+    roles = db.relationship(
+        'Rol',
+        secondary=usuario_roles,
+        backref=db.backref('usuarios', lazy='dynamic'),
+        lazy='select',
+    )
 
     def set_password(self, pw):
         self.password_hash = bcrypt.generate_password_hash(pw).decode('utf-8')
 
     def check_password(self, pw):
         return bcrypt.check_password_hash(self.password_hash, pw)
+
+    def has_role(self, nombre):
+        return any(rol.nombre == nombre for rol in self.roles)
 
 
 class Deteccion(db.Model):
