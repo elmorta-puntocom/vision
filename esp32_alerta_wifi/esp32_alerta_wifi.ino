@@ -2,7 +2,7 @@
 #include <WebServer.h>
 
 const char* SSID = "placa";
-const char* PASSWORD = "123454678";
+const char* PASSWORD = "12345678";
 
 // Pines reales solicitados:
 // P23 controla el motor vibrador.
