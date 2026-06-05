@@ -13,7 +13,6 @@ const int PIN_BUZZER = 22;
 WebServer server(80);
 
 bool alarmaActiva = false;
-unsigned long ultimoIntentoWifi = 0;
 
 void aplicarAlarma(bool activar) {
   alarmaActiva = activar;
@@ -43,21 +42,6 @@ void rutaNoEncontrada() {
   server.send(404, "text/plain", "Ruta no encontrada");
 }
 
-void conectarWifiSinBloquear() {
-  if (WiFi.status() == WL_CONNECTED) {
-    return;
-  }
-
-  unsigned long ahora = millis();
-  if (ahora - ultimoIntentoWifi < 1000) {
-    return;
-  }
-
-  ultimoIntentoWifi = ahora;
-  Serial.println("Conectando a WiFi...");
-  WiFi.begin(SSID, PASSWORD);
-}
-
 void setup() {
   Serial.begin(115200);
 
@@ -67,16 +51,19 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
+
   WiFi.begin(SSID, PASSWORD);
 
   Serial.println();
-  Serial.println("Esperando conexion WiFi...");
+  Serial.print("Conectando");
+
   while (WiFi.status() != WL_CONNECTED) {
-    conectarWifiSinBloquear();
-    yield();
+    delay(500);
+    Serial.print(".");
   }
 
-  Serial.println("WiFi conectado");
+  Serial.println();
+  Serial.println("Conectado");
   Serial.print("IP del ESP32: ");
   Serial.println(WiFi.localIP());
 
@@ -91,6 +78,5 @@ void setup() {
 }
 
 void loop() {
-  conectarWifiSinBloquear();
   server.handleClient();
 }
