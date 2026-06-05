@@ -1,7 +1,8 @@
 from collections import Counter, deque
-from collections import Counter, deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -13,6 +14,7 @@ import joblib
 import mediapipe as mp
 import numpy as np
 import pandas as pd
+import requests
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -62,9 +64,66 @@ EYE_CLOSED_SECONDS_THRESHOLD = 0.50
 EYE_PARTIAL_SECONDS_THRESHOLD = 1.20
 NORMAL_BLINK_MAX_SECONDS = 0.30
 
+# Cambia esta IP por la que imprime el ESP32 en el Monitor Serial.
+# Tambien puedes configurarla sin editar el archivo:
+#   PowerShell: $env:VISION_ESP32_IP="192.168.1.100"
+ESP32_IP = os.getenv("VISION_ESP32_IP", "192.168.1.100")
+ESP32_TIMEOUT_SECONDS = 0.8
+
 sys.path.insert(0, str(MODEL_DIR))
 from model.biometrics import calculate_eye_aspect_ratio, estimate_head_pitch # noqa: E402
 from model.data_collection import normalize_landmarks # noqa: E402
+
+
+def _enviar_peticion_esp32(ruta):
+    url = f"http://{ESP32_IP}{ruta}"
+
+    try:
+        respuesta = requests.get(url, timeout=ESP32_TIMEOUT_SECONDS)
+        respuesta.raise_for_status()
+        print(f"[ESP32] OK {ruta}: {respuesta.text}")
+        return True
+    except requests.exceptions.ConnectionError:
+        print(f"[ESP32] No se pudo conectar con {url}")
+    except requests.exceptions.Timeout:
+        print(f"[ESP32] Timeout al conectar con {url}")
+    except requests.exceptions.RequestException as exc:
+        print(f"[ESP32] Error HTTP en {url}: {exc}")
+
+    return False
+
+
+def enviar_alerta_on():
+    """Activa motor vibrador y buzzer en el ESP32."""
+    return _enviar_peticion_esp32("/alerta_on")
+
+
+def enviar_alerta_off():
+    """Apaga motor vibrador y buzzer en el ESP32."""
+    return _enviar_peticion_esp32("/alerta_off")
+
+
+class Esp32AlarmController:
+    """Envia ordenes al ESP32 solo cuando cambia el estado de somnolencia."""
+
+    def __init__(self):
+        self.alarma_activada = False
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._executor.submit(enviar_alerta_off)
+
+    def update(self, somnolencia_detectada):
+        if somnolencia_detectada == self.alarma_activada:
+            return
+
+        self.alarma_activada = somnolencia_detectada
+        accion = enviar_alerta_on if somnolencia_detectada else enviar_alerta_off
+        self._executor.submit(accion)
+
+    def apagar_y_cerrar(self):
+        self._executor.shutdown(wait=True, cancel_futures=False)
+        if self.alarma_activada:
+            enviar_alerta_off()
+            self.alarma_activada = False
 
 
 class PredictionSmoother:
@@ -1001,129 +1060,79 @@ def run_realtime_detection():
     smoother = PredictionSmoother()
     eye_tracker = EyeClosureTracker()
     head_tracker = HeadNodTracker()
+    alarm_controller = Esp32AlarmController()
 
     mp_holistic = mp.solutions.holistic
     mp_drawing = mp.solutions.drawing_utils
     frame_index = 0
 
-    with mp_holistic.Holistic(
-        static_image_mode=False,
-        model_complexity=1,
-        enable_segmentation=False,
-        refine_face_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    ) as holistic:
-        while True:
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                print("[CAMARA] No se pudo leer un frame. Cerrando deteccion.")
-                break
+    try:
+        with mp_holistic.Holistic(
+            static_image_mode=False,
+            model_complexity=1,
+            enable_segmentation=False,
+            refine_face_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        ) as holistic:
+            while True:
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    print("[CAMARA] No se pudo leer un frame. Cerrando deteccion.")
+                    break
 
-            frame_index += 1
-            frame = cv2.flip(frame, 1)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rgb.flags.writeable = False
-            results = holistic.process(rgb)
-            rgb.flags.writeable = True
+                frame_index += 1
+                frame = cv2.flip(frame, 1)
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                rgb.flags.writeable = False
+                results = holistic.process(rgb)
+                rgb.flags.writeable = True
 
-            draw_landmarks(frame, results, mp_drawing, mp_holistic)
+                draw_landmarks(frame, results, mp_drawing, mp_holistic)
 
-            now = time.monotonic()
-            face_detected = results.face_landmarks is not None
-            ear_result = calculate_eye_aspect_ratio(results.face_landmarks) if face_detected else None
-            eye_evidence = eye_tracker.update(ear_result, now) if face_detected else eye_tracker.update(None, now)
-            head_pitch = estimate_head_pitch(results.face_landmarks, frame.shape) if face_detected else None
-            head_evidence = head_tracker.update(head_pitch, 0.0, now) if face_detected else head_tracker.update(None, 0.0, now)
+                now = time.monotonic()
+                face_detected = results.face_landmarks is not None
+                ear_result = calculate_eye_aspect_ratio(results.face_landmarks) if face_detected else None
+                eye_evidence = eye_tracker.update(ear_result, now) if face_detected else eye_tracker.update(None, now)
+                head_pitch = estimate_head_pitch(results.face_landmarks, frame.shape) if face_detected else None
+                head_evidence = head_tracker.update(head_pitch, 0.0, now) if face_detected else head_tracker.update(None, 0.0, now)
 
-            estado = "No hay rostro"
-            confidence = None
-            probabilities = empty_probabilities()
-            smooth_probabilities = empty_probabilities()
-            smooth_label = LABEL_DESPIERTO
-            model_available = False
-            values = extract_landmarks(results)
-
-            if not face_detected:
-                # Do not reuse stale predictions when the face is gone.
-                smoother.clear()
-                head_tracker.clear()
-                render_status(
-                    frame,
-                    estado,
-                    confidence,
-                    probabilities,
-                    eye_evidence,
-                    head_evidence,
-                    model_available=False,
+                estado = "No hay rostro"
+                confidence = None
+                probabilities = empty_probabilities()
+                smooth_probabilities = empty_probabilities()
+                smooth_label = LABEL_DESPIERTO
+                model_available = False
+                decision = DetectionDecision(
+                    state=estado,
+                    confidence=0.0,
+                    head_drowsy=False,
+                    eye_drowsy=False,
                 )
-            else:
-                if values is None:
-                    # EAR can still work with a face only; the model requires pose too.
+                values = extract_landmarks(results)
+
+                if not face_detected:
+                    # Do not reuse stale predictions when the face is gone.
                     smoother.clear()
                     head_tracker.clear()
-                    decision = combine_signals(
-                        smooth_label,
-                        0.0,
-                        smooth_probabilities,
-                        eye_evidence,
-                        head_evidence,
-                    )
                     render_status(
                         frame,
-                        decision.state,
-                        decision.confidence,
-                        smooth_probabilities,
+                        estado,
+                        confidence,
+                        probabilities,
                         eye_evidence,
                         head_evidence,
                         model_available=False,
                     )
                 else:
-                    try:
-                        model_input = preprocess_landmarks(values, scaler, model, expected_features)
-                        raw_label, raw_confidence, probabilities, _ = infer_state(model, model_input, interpreter)
-                        smooth_label, smooth_confidence, smooth_probabilities = smoother.update(probabilities)
-                        head_evidence = head_tracker.update(
-                            head_pitch,
-                            smooth_probabilities[LABEL_SOMNOLENCIA],
-                            now,
-                        )
-                        decision = combine_signals(
-                            smooth_label,
-                            smooth_confidence,
-                            smooth_probabilities,
-                            eye_evidence,
-                            head_evidence,
-                        )
-                        render_status(
-                            frame,
-                            decision.state,
-                            decision.confidence,
-                            smooth_probabilities,
-                            eye_evidence,
-                            head_evidence,
-                            model_available=True,
-                        )
-                        log_prediction(
-                            frame_index,
-                            model_input.shape,
-                            probabilities,
-                            raw_label,
-                            raw_confidence,
-                            smooth_label,
-                            smooth_confidence,
-                            eye_evidence,
-                            head_evidence,
-                            decision,
-                        )
-                    except Exception as exc:
+                    if values is None:
+                        # EAR can still work with a face only; the model requires pose too.
                         smoother.clear()
                         head_tracker.clear()
-                        print(f"[ERROR] Inferencia omitida: {exc}")
                         decision = combine_signals(
-                            LABEL_DESPIERTO,
+                            smooth_label,
                             0.0,
-                            empty_probabilities(),
+                            smooth_probabilities,
                             eye_evidence,
                             head_evidence,
                         )
@@ -1131,19 +1140,81 @@ def run_realtime_detection():
                             frame,
                             decision.state,
                             decision.confidence,
-                            empty_probabilities(),
+                            smooth_probabilities,
                             eye_evidence,
                             head_evidence,
                             model_available=False,
                         )
+                    else:
+                        try:
+                            model_input = preprocess_landmarks(values, scaler, model, expected_features)
+                            raw_label, raw_confidence, probabilities, _ = infer_state(model, model_input, interpreter)
+                            smooth_label, smooth_confidence, smooth_probabilities = smoother.update(probabilities)
+                            head_evidence = head_tracker.update(
+                                head_pitch,
+                                smooth_probabilities[LABEL_SOMNOLENCIA],
+                                now,
+                            )
+                            decision = combine_signals(
+                                smooth_label,
+                                smooth_confidence,
+                                smooth_probabilities,
+                                eye_evidence,
+                                head_evidence,
+                            )
+                            render_status(
+                                frame,
+                                decision.state,
+                                decision.confidence,
+                                smooth_probabilities,
+                                eye_evidence,
+                                head_evidence,
+                                model_available=True,
+                            )
+                            log_prediction(
+                                frame_index,
+                                model_input.shape,
+                                probabilities,
+                                raw_label,
+                                raw_confidence,
+                                smooth_label,
+                                smooth_confidence,
+                                eye_evidence,
+                                head_evidence,
+                                decision,
+                            )
+                        except Exception as exc:
+                            smoother.clear()
+                            head_tracker.clear()
+                            print(f"[ERROR] Inferencia omitida: {exc}")
+                            decision = combine_signals(
+                                LABEL_DESPIERTO,
+                                0.0,
+                                empty_probabilities(),
+                                eye_evidence,
+                                head_evidence,
+                            )
+                            render_status(
+                                frame,
+                                decision.state,
+                                decision.confidence,
+                                empty_probabilities(),
+                                eye_evidence,
+                                head_evidence,
+                                model_available=False,
+                            )
 
-            cv2.imshow("Deteccion de Somnolencia", frame)
-            key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), 27):
-                break
+                somnolencia_detectada = decision.head_drowsy or decision.eye_drowsy
+                alarm_controller.update(somnolencia_detectada)
 
-    cap.release()
-    cv2.destroyAllWindows()
+                cv2.imshow("Deteccion de Somnolencia", frame)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord("q"), 27):
+                    break
+    finally:
+        alarm_controller.apagar_y_cerrar()
+        cap.release()
+        cv2.destroyAllWindows()
 
 
 def main():
