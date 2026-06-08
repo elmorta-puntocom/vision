@@ -7,6 +7,8 @@ from flask_bcrypt import Bcrypt
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
 
+from flask_mail import Mail
+
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -14,6 +16,7 @@ logger = logging.getLogger(__name__)
 db = SQLAlchemy()
 bcrypt = Bcrypt()
 login_manager = LoginManager()
+mail = Mail()
 
 login_manager.login_view = 'main.login'
 login_manager.login_message = 'Iniciá sesión para continuar.'
@@ -73,5 +76,15 @@ def create_app():
 
     init_offline_storage(app)
     app.register_blueprint(main_bp)
+
+    app.config['MAIL_SERVER']   = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
+    app.config['MAIL_PORT']     = int(os.environ.get('MAIL_PORT', 587))
+    app.config['MAIL_USE_TLS']  = True
+    app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
+    app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
+    app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME')
+
+    mail.init_app(app)
+
 
     return app
