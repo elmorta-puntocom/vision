@@ -22,6 +22,10 @@ from .services import (
     mysql_disponible,
 )
 
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
+from flask_mail import Message
+from . import mail
+
 
 bp = Blueprint('main', __name__)
 
@@ -380,3 +384,67 @@ def api_deteccion():
     except Exception as e:
         logger.error(f'[API] Error al guardar detección: {e}')
         return {'status': 'error', 'message': str(e)}, 500
+
+def _reset_token(email):
+    s = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    return s.dumps(email, salt='password-reset')
+
+def _verify_token(token, max_age=3600):
+    s = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    try:
+        return s.loads(token, salt='password-reset', max_age=max_age)
+    except (SignatureExpired, BadSignature):
+        return None
+
+
+@bp.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for('main.dashboard'))
+
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        user = Usuario.query.filter_by(email=email).first()
+
+        # Siempre mostramos el mismo mensaje por seguridad
+        if user:
+            token = _reset_token(email)
+            link = url_for('main.reset_password', token=token, _external=True)
+            msg = Message('Recuperación de contraseña — Vision', recipients=[email])
+            msg.body = f'Usá este link para restablecer tu contraseña (válido 1 hora):\n{link}'
+            try:
+                mail.send(msg)
+            except Exception as e:
+                logger.error(f'[MAIL] Error al enviar email: {e}')
+
+        flash('Si el correo existe, recibirás un link en breve.', 'info')
+        return redirect(url_for('main.login'))
+
+    return render_template('forgot_password.html')
+
+
+@bp.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    email = _verify_token(token)
+    if not email:
+        flash('El link es inválido o expiró.', 'danger')
+        return redirect(url_for('main.forgot_password'))
+
+    if request.method == 'POST':
+        pw = request.form.get('password', '')
+        pw2 = request.form.get('confirm_password', '')
+        ok, msg = valid_password(pw)
+
+        if not ok:
+            flash(msg, 'danger')
+        elif pw != pw2:
+            flash('Las contraseñas no coinciden.', 'danger')
+        else:
+            user = Usuario.query.filter_by(email=email).first()
+            if user:
+                user.set_password(pw)
+                db.session.commit()
+                flash('Contraseña actualizada. Podés iniciar sesión.', 'success')
+                return redirect(url_for('main.login'))
+
+    return render_template('reset_password.html', token=token)
