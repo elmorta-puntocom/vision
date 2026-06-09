@@ -113,3 +113,7 @@ Your data will help train a more accurate and reliable drowsiness detection mode
 # python app.py
 
 # (.venv) PS C:\xampp\htdocs\vision\vision\model> python data_collection.py
+
+cd C:\Users\juanc\vision\vision
+.venv\Scripts\activate
+python deteccion_tiempo_real.py

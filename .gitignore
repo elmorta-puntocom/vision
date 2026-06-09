@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 *.pyc.*
 drowsy_cnn_model.keras
+iniciar_vision.bat
