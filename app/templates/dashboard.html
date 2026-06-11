@@ -402,6 +402,9 @@
             <a class="dash-action-btn" href="{{ url_for('main.editar_usuario', user_id=current_user.id) }}">
                 Modificar usuario
             </a>
+            <a class="dash-action-btn outline" href="{{ url_for('main.dispositivos') }}">
+                Mis dispositivos
+            </a>
             {% if current_user.has_role('Administrador') %}
             <a class="dash-action-btn outline" href="{{ url_for('main.admin_base_datos') }}">
                 Panel admin
@@ -412,10 +415,18 @@
 
     <div class="device-banner">
         <div class="device-banner-copy">
-            <div class="device-banner-kicker">// Vision Device enlazado</div>
-            <div class="device-banner-title">Monitoreo preventivo preparado para registrar eventos críticos</div>
+            <div class="device-banner-kicker">
+                // Vision Device {{ 'enlazado' if dispositivos else 'sin vincular' }}
+            </div>
+            <div class="device-banner-title">
+                {% if dispositivos %}
+                    {{ dispositivos|length }} dispositivo{{ 's' if dispositivos|length != 1 else '' }} asociado{{ 's' if dispositivos|length != 1 else '' }} a tu cuenta
+                {% else %}
+                    Vincula tu ESP32 para proteger los datos del conductor
+                {% endif %}
+            </div>
             <p>
-                La plataforma centraliza detecciones de somnolencia, evidencia de video y estado de sincronización del dispositivo sin exponer datos privados del conductor.
+                La plataforma centraliza detecciones de somnolencia, evidencia de video y estado de sincronización sin exponer datos privados a cuentas no autorizadas.
             </p>
         </div>
         <div class="device-banner-media">

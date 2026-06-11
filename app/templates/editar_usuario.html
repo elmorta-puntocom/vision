@@ -306,6 +306,7 @@
                 </div>
             </div>
 
+            {% if current_user.has_role('Administrador') %}
             <fieldset class="form-group full">
                 <legend>Roles</legend>
                 <div class="roles-list">
@@ -333,6 +334,7 @@
                 </div>
                 <span class="error-text" id="rolesError">{{ errors.get('roles', '') }}</span>
             </fieldset>
+            {% endif %}
 
             <div class="form-actions">
                 <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancelar</a>
@@ -380,7 +382,7 @@
         setError(fullName, messages.nombre, '');
         setError(email, messages.email, '');
         setError(password, messages.password, '');
-        messages.roles.textContent = '';
+        if (messages.roles) messages.roles.textContent = '';
 
         if (!fullNameValue) {
             setError(fullName, messages.nombre, 'El nombre y apellido son obligatorios.');
@@ -400,8 +402,8 @@
             valid = false;
         }
 
-        if (selectedRolesCount() === 0) {
-            messages.roles.textContent = 'Seleccioná al menos un rol.';
+        if (roles.length > 0 && selectedRolesCount() === 0) {
+            if (messages.roles) messages.roles.textContent = 'Seleccioná al menos un rol.';
             valid = false;
         }
 

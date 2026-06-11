@@ -1,0 +1,278 @@
+{% extends 'base.html' %}
+
+{% block title %}Dispositivos - Vision{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .devices-page {
+        padding: 5rem;
+        max-width: 1100px;
+    }
+
+    .devices-header {
+        margin-bottom: 2rem;
+    }
+
+    .devices-kicker {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--accent);
+    }
+
+    .devices-title {
+        font-size: 2rem;
+        font-weight: 800;
+        margin-top: 0.4rem;
+    }
+
+    .devices-grid {
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        gap: 1.5rem;
+    }
+
+    .device-panel,
+    .device-row,
+    .empty-devices {
+        background: var(--surface);
+        border: 1px solid var(--border);
+    }
+
+    .device-panel {
+        padding: 1.5rem;
+        align-self: start;
+    }
+
+    .device-panel h2,
+    .linked-title {
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 1rem;
+    }
+
+    .field {
+        margin-bottom: 1rem;
+    }
+
+    .field label {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 0.35rem;
+    }
+
+    .field input {
+        width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: var(--text);
+        font-family: var(--font-mono);
+        padding: 0.75rem;
+        outline: none;
+    }
+
+    .field input:focus {
+        border-color: var(--accent);
+    }
+
+    .primary-btn,
+    .command-btn {
+        border: 1px solid var(--accent);
+        border-radius: var(--radius);
+        background: var(--accent);
+        color: var(--bg);
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.12em;
+        padding: 0.7rem 1rem;
+        text-transform: uppercase;
+    }
+
+    .primary-btn {
+        width: 100%;
+    }
+
+    .command-btn.secondary {
+        background: transparent;
+        color: var(--accent);
+    }
+
+    .device-list {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .device-row {
+        padding: 1.25rem;
+    }
+
+    .device-row-head {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .device-id {
+        font-family: var(--font-mono);
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+
+    .device-status {
+        font-family: var(--font-mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--success);
+    }
+
+    .device-status.offline {
+        color: var(--warning);
+    }
+
+    .device-meta {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem 1rem;
+        color: var(--text-mid);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+    }
+
+    .device-actions {
+        display: flex;
+        gap: 0.75rem;
+        margin-top: 1rem;
+    }
+
+    .empty-devices {
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        line-height: 1.7;
+        padding: 2rem;
+    }
+
+    @media (max-width: 900px) {
+        .devices-page {
+            padding: 5rem 1.5rem 3rem;
+        }
+
+        .devices-grid,
+        .device-meta {
+            grid-template-columns: 1fr;
+        }
+
+        .device-row-head,
+        .device-actions {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="devices-page">
+    <div class="devices-header">
+        <div class="devices-kicker">// Vinculacion segura</div>
+        <h1 class="devices-title">Dispositivos Vision</h1>
+    </div>
+
+    <div class="devices-grid">
+        <form class="device-panel" method="POST" action="{{ url_for('main.dispositivos') }}">
+            <h2>Vincular ESP32</h2>
+            <div class="field">
+                <label for="device_id">ID del dispositivo</label>
+                <input id="device_id" name="device_id" placeholder="ESP32-8F3A91" required>
+            </div>
+            <div class="field">
+                <label for="activation_code">Codigo de activacion</label>
+                <input id="activation_code" name="activation_code" placeholder="742913" required>
+            </div>
+            <button class="primary-btn" type="submit">Vincular</button>
+        </form>
+
+        <section>
+            <div class="linked-title">Mis dispositivos</div>
+            {% if dispositivos %}
+            <div class="device-list">
+                {% for dispositivo in dispositivos %}
+                {% set online = dispositivo.last_seen and (now() - dispositivo.last_seen).total_seconds() < 600 %}
+                <article class="device-row">
+                    <div class="device-row-head">
+                        <div class="device-id">{{ dispositivo.device_id }}</div>
+                        <div class="device-status {{ '' if online else 'offline' }}">
+                            {{ 'Online' if online else 'Offline' }}
+                        </div>
+                    </div>
+                    <div class="device-meta">
+                        <div>MAC: {{ dispositivo.mac or 'Sin registrar' }}</div>
+                        <div>IP: {{ dispositivo.ip_address or 'Sin registrar' }}</div>
+                        <div>Firmware: {{ dispositivo.firmware_version or 'N/D' }}</div>
+                        <div>
+                            Ultima conexion:
+                            {{ dispositivo.last_seen.strftime('%d/%m/%Y %H:%M:%S') if dispositivo.last_seen else 'Nunca' }}
+                        </div>
+                    </div>
+                    <div class="device-actions">
+                        <button class="command-btn" data-device="{{ dispositivo.device_id }}" data-command="alert_on" type="button">
+                            Activar alerta
+                        </button>
+                        <button class="command-btn secondary" data-device="{{ dispositivo.device_id }}" data-command="alert_off" type="button">
+                            Apagar alerta
+                        </button>
+                    </div>
+                </article>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-devices">
+                No hay ESP32 vinculados a esta cuenta. Encende el dispositivo, espera que haga heartbeat y cargalo con su codigo de activacion.
+            </div>
+            {% endif %}
+        </section>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.querySelectorAll('[data-command]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const deviceId = button.dataset.device;
+            const command = button.dataset.command;
+            button.disabled = true;
+
+            try {
+                const response = await fetch(`/api/devices/${deviceId}/command`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({command})
+                });
+
+                if (!response.ok) {
+                    throw new Error('command_failed');
+                }
+            } catch (error) {
+                alert('No se pudo enviar el comando.');
+            } finally {
+                button.disabled = false;
+            }
+        });
+    });
+</script>
+{% endblock %}

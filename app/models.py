@@ -51,6 +51,11 @@ class Usuario(UserMixin, db.Model):
         uselist=False,
         cascade='all, delete-orphan',
     )
+    dispositivos = db.relationship(
+        'Dispositivo',
+        backref='usuario',
+        lazy=True,
+    )
     roles = db.relationship(
         'Rol',
         secondary=usuario_roles,
@@ -101,3 +106,57 @@ class EstadisticaSeguridad(db.Model):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+
+
+class Dispositivo(db.Model):
+    __tablename__ = 'dispositivos'
+
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.String(64), nullable=False, unique=True)
+    mac = db.Column(db.String(32))
+    device_secret = db.Column(db.String(128), nullable=False)
+    activation_code_hash = db.Column(db.String(255), nullable=False)
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey('usuarios.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    ip_address = db.Column(db.String(45))
+    firmware_version = db.Column(db.String(32))
+    last_nonce = db.Column(db.String(64))
+    last_seen = db.Column(db.DateTime)
+    linked_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class DispositivoEvento(db.Model):
+    __tablename__ = 'dispositivo_eventos'
+
+    id = db.Column(db.Integer, primary_key=True)
+    dispositivo_id = db.Column(
+        db.Integer,
+        db.ForeignKey('dispositivos.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    event_type = db.Column(db.String(50), nullable=False)
+    value = db.Column(db.String(120))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    dispositivo = db.relationship('Dispositivo', backref='eventos')
+
+
+class DispositivoComando(db.Model):
+    __tablename__ = 'dispositivo_comandos'
+
+    id = db.Column(db.Integer, primary_key=True)
+    dispositivo_id = db.Column(
+        db.Integer,
+        db.ForeignKey('dispositivos.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    command = db.Column(db.String(50), nullable=False)
+    consumed = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    consumed_at = db.Column(db.DateTime)
+
+    dispositivo = db.relationship('Dispositivo', backref='comandos')

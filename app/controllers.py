@@ -1,11 +1,16 @@
+import hashlib
+import hmac
 import os
 import re
+import time
+from datetime import datetime, timedelta
 
 from flask import (
     Blueprint,
     abort,
     current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -13,23 +18,32 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required, login_user, logout_user
+from flask_mail import Message
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from . import db, logger
-from .models import Deteccion, EstadisticaSeguridad, Rol, Usuario
+from . import bcrypt, db, logger, mail
+from .models import (
+    Deteccion,
+    Dispositivo,
+    DispositivoComando,
+    DispositivoEvento,
+    EstadisticaSeguridad,
+    Rol,
+    Usuario,
+)
 from .services import (
     contar_pendientes_usuario,
     guardar_deteccion_offline,
     mysql_disponible,
 )
 
-from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
-from flask_mail import Message
-from . import mail
-
 
 bp = Blueprint('main', __name__)
 
 DEFAULT_ROLES = ('Administrador', 'Usuario común')
+DEVICE_SIGNATURE_TTL_SECONDS = 300
+DEVICE_ONLINE_WINDOW_MINUTES = 10
+ALLOWED_DEVICE_COMMANDS = {'alert_on', 'alert_off'}
 
 
 def valid_email(email):
@@ -74,6 +88,66 @@ def _init_stats(usuario_id):
     if not EstadisticaSeguridad.query.filter_by(usuario_id=usuario_id).first():
         db.session.add(EstadisticaSeguridad(usuario_id=usuario_id))
         db.session.commit()
+
+
+def _clean_device_id(value):
+    return (value or '').strip().upper()
+
+
+def _device_payload(data, include_mac=False):
+    parts = [
+        _clean_device_id(data.get('device_id')),
+        str(data.get('ts', '')).strip(),
+        str(data.get('nonce', '')).strip(),
+    ]
+    if include_mac:
+        parts.insert(1, str(data.get('mac', '')).strip().upper())
+    return '|'.join(parts)
+
+
+def _verify_device_signature(data, dispositivo, include_mac=False):
+    signature = str(data.get('signature', '')).strip().lower()
+    ts = str(data.get('ts', '')).strip()
+    nonce = str(data.get('nonce', '')).strip()
+
+    if not signature or not ts or not nonce:
+        return False, 'missing_signature_data'
+
+    try:
+        timestamp = int(ts)
+    except ValueError:
+        return False, 'invalid_timestamp'
+
+    if abs(time.time() - timestamp) > DEVICE_SIGNATURE_TTL_SECONDS:
+        return False, 'expired_timestamp'
+
+    if dispositivo.last_nonce and dispositivo.last_nonce == nonce:
+        return False, 'repeated_nonce'
+
+    expected = hmac.new(
+        dispositivo.device_secret.encode('utf-8'),
+        _device_payload(data, include_mac=include_mac).encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        return False, 'invalid_signature'
+
+    return True, ''
+
+
+def _get_signed_device(data, include_mac=False):
+    device_id = _clean_device_id(data.get('device_id'))
+    dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+
+    if not dispositivo:
+        return None, 'device_not_registered'
+
+    ok, error = _verify_device_signature(data, dispositivo, include_mac=include_mac)
+    if not ok:
+        return None, error
+
+    return dispositivo, ''
 
 
 @bp.route('/')
@@ -216,12 +290,67 @@ def dashboard():
         .all()
     )
     pendientes_count = contar_pendientes_usuario(current_user.id)
+    dispositivos_vinculados = (
+        Dispositivo.query
+        .filter_by(usuario_id=current_user.id)
+        .order_by(Dispositivo.linked_at.desc())
+        .all()
+    )
 
     return render_template(
         'dashboard.html',
         stats=stats,
         detecciones=detecciones,
         pendientes_count=pendientes_count,
+        dispositivos=dispositivos_vinculados,
+    )
+
+
+@bp.route('/dispositivos', methods=['GET', 'POST'])
+@login_required
+def dispositivos():
+    if request.method == 'POST':
+        device_id = _clean_device_id(request.form.get('device_id'))
+        activation_code = request.form.get('activation_code', '').strip()
+
+        dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+        if not dispositivo:
+            flash('Dispositivo no registrado.', 'danger')
+            return redirect(url_for('main.dispositivos'))
+
+        if dispositivo.usuario_id:
+            flash('Ese dispositivo ya esta vinculado a una cuenta.', 'danger')
+            return redirect(url_for('main.dispositivos'))
+
+        if not dispositivo.last_seen:
+            flash('Primero encende el ESP32 para que se registre en el servidor.', 'warning')
+            return redirect(url_for('main.dispositivos'))
+
+        online_limit = datetime.utcnow() - timedelta(minutes=DEVICE_ONLINE_WINDOW_MINUTES)
+        if dispositivo.last_seen < online_limit:
+            flash('El ESP32 no se conecto recientemente. Encendelo y volve a intentar.', 'warning')
+            return redirect(url_for('main.dispositivos'))
+
+        if not bcrypt.check_password_hash(dispositivo.activation_code_hash, activation_code):
+            flash('Codigo de activacion incorrecto.', 'danger')
+            return redirect(url_for('main.dispositivos'))
+
+        dispositivo.usuario_id = current_user.id
+        dispositivo.linked_at = datetime.utcnow()
+        db.session.commit()
+        flash('Dispositivo vinculado correctamente.', 'success')
+        return redirect(url_for('main.dispositivos'))
+
+    vinculados = (
+        Dispositivo.query
+        .filter_by(usuario_id=current_user.id)
+        .order_by(Dispositivo.linked_at.desc())
+        .all()
+    )
+    return render_template(
+        'dispositivos.html',
+        dispositivos=vinculados,
+        now=datetime.utcnow,
     )
 
 
@@ -295,7 +424,6 @@ def editar_usuario(user_id):
         nombre_apellido = request.form.get('nombre_apellido', '').strip()
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
-        roles_seleccionados = request.form.getlist('roles')
         nombre, apellido = split_full_name(nombre_apellido)
 
         if not nombre_apellido:
@@ -313,9 +441,14 @@ def editar_usuario(user_id):
         if not valid_optional_password(password):
             errors['password'] = 'La contraseña debe tener mínimo 6 caracteres.'
 
-        selected_roles = Rol.query.filter(Rol.nombre.in_(roles_seleccionados)).all()
-        if not selected_roles:
-            errors['roles'] = 'Seleccioná al menos un rol.'
+        # Solo el admin puede cambiar roles
+        if current_user.has_role('Administrador'):
+            roles_seleccionados = request.form.getlist('roles')
+            selected_roles = Rol.query.filter(Rol.nombre.in_(roles_seleccionados)).all()
+            if not selected_roles:
+                errors['roles'] = 'Seleccioná al menos un rol.'
+        else:
+            selected_roles = usuario.roles  # mantiene los roles actuales sin cambio
 
         if not errors:
             usuario.nombre = nombre
@@ -361,6 +494,97 @@ def serve_video(det_id):
     return send_from_directory(directory, filename)
 
 
+@bp.route('/api/esp32/heartbeat', methods=['POST'])
+def api_esp32_heartbeat():
+    data = request.get_json(silent=True) or {}
+    dispositivo, error = _get_signed_device(data, include_mac=True)
+
+    if not dispositivo:
+        return jsonify({'status': 'error', 'message': error}), 403
+
+    dispositivo.mac = str(data.get('mac', '')).strip().upper()
+    dispositivo.ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+    dispositivo.firmware_version = str(data.get('firmware_version', '')).strip()[:32] or None
+    dispositivo.last_nonce = str(data.get('nonce', '')).strip()
+    dispositivo.last_seen = datetime.utcnow()
+
+    db.session.add(DispositivoEvento(
+        dispositivo_id=dispositivo.id,
+        event_type='heartbeat',
+        value=dispositivo.ip_address,
+    ))
+    db.session.commit()
+
+    return jsonify({'status': 'ok', 'linked': bool(dispositivo.usuario_id)})
+
+
+@bp.route('/api/esp32/commands', methods=['POST'])
+def api_esp32_commands():
+    data = request.get_json(silent=True) or {}
+    dispositivo, error = _get_signed_device(data, include_mac=False)
+
+    if not dispositivo:
+        return jsonify({'status': 'error', 'message': error}), 403
+
+    dispositivo.last_nonce = str(data.get('nonce', '')).strip()
+    dispositivo.last_seen = datetime.utcnow()
+
+    comandos = (
+        DispositivoComando.query
+        .filter_by(dispositivo_id=dispositivo.id, consumed=False)
+        .order_by(DispositivoComando.created_at.asc())
+        .limit(5)
+        .all()
+    )
+    payload = [cmd.command for cmd in comandos]
+    for cmd in comandos:
+        cmd.consumed = True
+        cmd.consumed_at = datetime.utcnow()
+
+    db.session.commit()
+    return jsonify({'status': 'ok', 'commands': payload})
+
+
+@bp.route('/api/devices/<device_id>/status')
+@login_required
+def api_device_status(device_id):
+    dispositivo = Dispositivo.query.filter_by(
+        device_id=_clean_device_id(device_id),
+        usuario_id=current_user.id,
+    ).first_or_404()
+
+    return jsonify({
+        'device_id': dispositivo.device_id,
+        'mac': dispositivo.mac,
+        'ip_address': dispositivo.ip_address,
+        'firmware_version': dispositivo.firmware_version,
+        'last_seen': dispositivo.last_seen.isoformat() if dispositivo.last_seen else None,
+    })
+
+
+@bp.route('/api/devices/<device_id>/command', methods=['POST'])
+@login_required
+def api_device_command(device_id):
+    data = request.get_json(silent=True) or request.form
+    command = str(data.get('command', '')).strip()
+
+    if command not in ALLOWED_DEVICE_COMMANDS:
+        return jsonify({'status': 'error', 'message': 'invalid_command'}), 400
+
+    dispositivo = Dispositivo.query.filter_by(
+        device_id=_clean_device_id(device_id),
+        usuario_id=current_user.id,
+    ).first_or_404()
+
+    db.session.add(DispositivoComando(
+        dispositivo_id=dispositivo.id,
+        command=command,
+    ))
+    db.session.commit()
+
+    return jsonify({'status': 'ok'})
+
+
 @bp.route('/api/deteccion', methods=['POST'])
 def api_deteccion():
     """
@@ -372,6 +596,13 @@ def api_deteccion():
         abort(401)
 
     try:
+        device_id = _clean_device_id(data.get('device_id'))
+        dispositivo = None
+        if device_id:
+            dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+            if not dispositivo or dispositivo.usuario_id != int(data['usuario_id']):
+                return {'status': 'error', 'message': 'device_not_owned_by_user'}, 403
+
         guardar_deteccion_offline(
             usuario_id=data['usuario_id'],
             tipo_evento=data['tipo_evento'],
@@ -380,19 +611,28 @@ def api_deteccion():
             valor_pitch=data.get('valor_pitch'),
             duracion_alerta=data.get('duracion_alerta'),
         )
+        if dispositivo:
+            db.session.add(DispositivoEvento(
+                dispositivo_id=dispositivo.id,
+                event_type='deteccion',
+                value=data['tipo_evento'],
+            ))
+            db.session.commit()
         return {'status': 'ok', 'message': 'Detección guardada localmente.'}, 201
     except Exception as e:
         logger.error(f'[API] Error al guardar detección: {e}')
         return {'status': 'error', 'message': str(e)}, 500
 
+
 def _reset_token(email):
-    s = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
-    return s.dumps(email, salt='password-reset')
+    serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    return serializer.dumps(email, salt='password-reset')
+
 
 def _verify_token(token, max_age=3600):
-    s = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
     try:
-        return s.loads(token, salt='password-reset', max_age=max_age)
+        return serializer.loads(token, salt='password-reset', max_age=max_age)
     except (SignatureExpired, BadSignature):
         return None
 
@@ -406,18 +646,17 @@ def forgot_password():
         email = request.form.get('email', '').strip().lower()
         user = Usuario.query.filter_by(email=email).first()
 
-        # Siempre mostramos el mismo mensaje por seguridad
         if user:
             token = _reset_token(email)
             link = url_for('main.reset_password', token=token, _external=True)
-            msg = Message('Recuperación de contraseña — Vision', recipients=[email])
-            msg.body = f'Usá este link para restablecer tu contraseña (válido 1 hora):\n{link}'
+            msg = Message('Recuperacion de contraseña - Vision', recipients=[email])
+            msg.body = f'Usa este link para restablecer tu contraseña (valido 1 hora):\n{link}'
             try:
                 mail.send(msg)
-            except Exception as e:
-                logger.error(f'[MAIL] Error al enviar email: {e}')
+            except Exception as exc:
+                logger.error(f'[MAIL] Error al enviar email: {exc}')
 
-        flash('Si el correo existe, recibirás un link en breve.', 'info')
+        flash('Si el correo existe, recibiras un link en breve.', 'info')
         return redirect(url_for('main.login'))
 
     return render_template('forgot_password.html')
@@ -427,7 +666,7 @@ def forgot_password():
 def reset_password(token):
     email = _verify_token(token)
     if not email:
-        flash('El link es inválido o expiró.', 'danger')
+        flash('El link es invalido o expiro.', 'danger')
         return redirect(url_for('main.forgot_password'))
 
     if request.method == 'POST':
@@ -444,7 +683,7 @@ def reset_password(token):
             if user:
                 user.set_password(pw)
                 db.session.commit()
-                flash('Contraseña actualizada. Podés iniciar sesión.', 'success')
+                flash('Contraseña actualizada. Podes iniciar sesion.', 'success')
                 return redirect(url_for('main.login'))
 
     return render_template('reset_password.html', token=token)
