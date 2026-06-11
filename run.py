@@ -2,7 +2,8 @@ import os
 
 from app import create_app, db, logger
 from app.services import start_sync_thread
-
+from dotenv import load_dotenv
+load_dotenv()
 
 app = create_app()
 

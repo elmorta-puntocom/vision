@@ -649,12 +649,12 @@ def forgot_password():
         if user:
             token = _reset_token(email)
             link = url_for('main.reset_password', token=token, _external=True)
-            msg = Message('Recuperacion de contraseña - Vision', recipients=[email])
-            msg.body = f'Usa este link para restablecer tu contraseña (valido 1 hora):\n{link}'
+            msg = Message('Recuperación de contraseña — Vision', recipients=[email])
+            msg.body = f'Usá este link para restablecer tu contraseña (válido 1 hora):\n{link}'
             try:
                 mail.send(msg)
-            except Exception as exc:
-                logger.error(f'[MAIL] Error al enviar email: {exc}')
+            except Exception as e:
+                logger.error(f'[MAIL] Error al enviar email: {e}')
 
         flash('Si el correo existe, recibiras un link en breve.', 'info')
         return redirect(url_for('main.login'))
