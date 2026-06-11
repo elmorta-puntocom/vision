@@ -406,16 +406,29 @@ def forgot_password():
         email = request.form.get('email', '').strip().lower()
         user = Usuario.query.filter_by(email=email).first()
 
-        # Siempre mostramos el mismo mensaje por seguridad
         if user:
             token = _reset_token(email)
-            link = url_for('main.reset_password', token=token, _external=True)
-            msg = Message('Recuperación de contraseña — Vision', recipients=[email])
-            msg.body = f'Usá este link para restablecer tu contraseña (válido 1 hora):\n{link}'
+            link  = url_for('main.reset_password', token=token, _external=True)
+            logger.info(f'[MAIL] Intentando enviar link de recuperación a: {email}')
+            logger.info(f'[MAIL] Link generado: {link}')
+            logger.info(f'[MAIL] MAIL_SERVER={current_app.config.get("MAIL_SERVER")} '
+                        f'PORT={current_app.config.get("MAIL_PORT")} '
+                        f'TLS={current_app.config.get("MAIL_USE_TLS")} '
+                        f'USER={current_app.config.get("MAIL_USERNAME")}')
+            msg = Message(
+                'Recuperación de contraseña — Vision',
+                recipients=[email],
+            )
+            msg.body = (
+                f'Usá este link para restablecer tu contraseña (válido 1 hora):\n\n'
+                f'{link}\n\n'
+                f'Si no solicitaste este cambio, ignorá este mensaje.'
+            )
             try:
                 mail.send(msg)
+                logger.info(f'[MAIL] ✓ Email enviado correctamente a {email}')
             except Exception as e:
-                logger.error(f'[MAIL] Error al enviar email: {e}')
+                logger.error(f'[MAIL] ✗ Error al enviar email: {type(e).__name__}: {e}')
 
         flash('Si el correo existe, recibirás un link en breve.', 'info')
         return redirect(url_for('main.login'))
