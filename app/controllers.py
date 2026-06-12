@@ -412,8 +412,8 @@ def admin_base_datos():
 @bp.route('/usuarios/<int:user_id>/editar', methods=['GET', 'POST'])
 @login_required
 def editar_usuario(user_id):
-    if user_id != current_user.id and not current_user.has_role('Administrador'):
-        abort(403)
+    if not current_user.has_role('Administrador'):
+     abort(403)
 
     _ensure_default_roles()
     usuario = Usuario.query.get_or_404(user_id)
@@ -438,9 +438,6 @@ def editar_usuario(user_id):
             if existing_email and existing_email.id != usuario.id:
                 errors['email'] = 'Ese e-mail ya está registrado.'
 
-        if not valid_optional_password(password):
-            errors['password'] = 'La contraseña debe tener mínimo 6 caracteres.'
-
         # Solo el admin puede cambiar roles
         if current_user.has_role('Administrador'):
             roles_seleccionados = request.form.getlist('roles')
@@ -455,9 +452,7 @@ def editar_usuario(user_id):
             usuario.apellido = apellido
             if email:
                 usuario.email = email
-            if password:
-                usuario.set_password(password)
-            usuario.roles = selected_roles
+                usuario.roles = selected_roles
 
             db.session.commit()
             flash('Usuario actualizado correctamente.', 'success')
