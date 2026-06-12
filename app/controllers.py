@@ -40,7 +40,8 @@ from .services import (
 
 bp = Blueprint('main', __name__)
 
-DEFAULT_ROLES = ('Administrador', 'Usuario común')
+DEFAULT_USER_ROLE = 'Usuario común'
+DEFAULT_ROLES = ('Administrador', DEFAULT_USER_ROLE)
 DEVICE_SIGNATURE_TTL_SECONDS = 300
 DEVICE_ONLINE_WINDOW_MINUTES = 10
 ALLOWED_DEVICE_COMMANDS = {'alert_on', 'alert_off'}
@@ -81,6 +82,21 @@ def _ensure_default_roles():
             db.session.add(Rol(nombre=role_name))
             created = True
     if created:
+        db.session.commit()
+
+
+def _default_user_role():
+    _ensure_default_roles()
+    return Rol.query.filter_by(nombre=DEFAULT_USER_ROLE).first()
+
+
+def _ensure_user_role(usuario):
+    if usuario.roles:
+        return
+
+    default_role = _default_user_role()
+    if default_role:
+        usuario.roles.append(default_role)
         db.session.commit()
 
 
@@ -205,8 +221,11 @@ def register():
                     form_data={'nombre': nombre, 'apellido': apellido, 'email': email},
                 )
 
+            default_role = _default_user_role()
             u = Usuario(nombre=nombre, apellido=apellido, email=email)
             u.set_password(pw)
+            if default_role:
+                u.roles.append(default_role)
             db.session.add(u)
             db.session.commit()
         except Exception as exc:
@@ -280,6 +299,7 @@ def logout():
 @login_required
 def dashboard():
     _ensure_default_roles()
+    _ensure_user_role(current_user)
     _init_stats(current_user.id)
     stats = EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()
     detecciones = (
@@ -412,18 +432,19 @@ def admin_base_datos():
 @bp.route('/usuarios/<int:user_id>/editar', methods=['GET', 'POST'])
 @login_required
 def editar_usuario(user_id):
-    if not current_user.has_role('Administrador'):
-     abort(403)
-
     _ensure_default_roles()
+    is_admin = current_user.has_role('Administrador')
+    if not is_admin and user_id != current_user.id:
+        abort(403)
+
     usuario = Usuario.query.get_or_404(user_id)
+    _ensure_user_role(usuario)
     roles_disponibles = Rol.query.order_by(Rol.nombre.asc()).all()
     errors = {}
 
     if request.method == 'POST':
         nombre_apellido = request.form.get('nombre_apellido', '').strip()
-        email = request.form.get('email', '').strip().lower()
-        password = request.form.get('password', '')
+        email = request.form.get('email', '').strip().lower() if is_admin else usuario.email
         nombre, apellido = split_full_name(nombre_apellido)
 
         if not nombre_apellido:
@@ -431,26 +452,28 @@ def editar_usuario(user_id):
         elif not nombre or not apellido:
             errors['nombre_apellido'] = 'Ingresá nombre y apellido.'
 
-        if email and not valid_email(email):
-            errors['email'] = 'Ingresá un e-mail válido.'
-        elif email:
-            existing_email = Usuario.query.filter_by(email=email).first()
-            if existing_email and existing_email.id != usuario.id:
-                errors['email'] = 'Ese e-mail ya está registrado.'
+        if is_admin:
+            if not email:
+                errors['email'] = 'El e-mail es obligatorio.'
+            elif not valid_email(email):
+                errors['email'] = 'Ingresá un e-mail válido.'
+            else:
+                existing_email = Usuario.query.filter_by(email=email).first()
+                if existing_email and existing_email.id != usuario.id:
+                    errors['email'] = 'Ese e-mail ya está registrado.'
 
-        # Solo el admin puede cambiar roles
-        if current_user.has_role('Administrador'):
+        if is_admin:
             roles_seleccionados = request.form.getlist('roles')
             selected_roles = Rol.query.filter(Rol.nombre.in_(roles_seleccionados)).all()
             if not selected_roles:
                 errors['roles'] = 'Seleccioná al menos un rol.'
         else:
-            selected_roles = usuario.roles  # mantiene los roles actuales sin cambio
+            selected_roles = usuario.roles
 
         if not errors:
             usuario.nombre = nombre
             usuario.apellido = apellido
-            if email:
+            if is_admin:
                 usuario.email = email
                 usuario.roles = selected_roles
 
@@ -472,6 +495,7 @@ def editar_usuario(user_id):
         'editar_usuario.html',
         usuario=usuario,
         roles_disponibles=roles_disponibles,
+        is_admin=is_admin,
         form_data=form_data,
         errors=errors,
     )

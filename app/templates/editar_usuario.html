@@ -277,6 +277,7 @@
                     <span class="error-text" id="nombreError">{{ errors.get('nombre_apellido', '') }}</span>
                 </div>
 
+                {% if is_admin %}
                 <div class="form-group">
                     <label for="email">E-mail</label>
                     <input
@@ -287,13 +288,14 @@
                         class="{{ 'error' if errors.get('email') else '' }}"
                         autocomplete="email"
                     >
-                    <span class="help-text">Opcional. Si lo dejás vacío, se mantiene el actual.</span>
+                    <span class="help-text">Solo administradores pueden modificar este dato.</span>
                     <span class="error-text" id="emailError">{{ errors.get('email', '') }}</span>
                 </div>
+                {% endif %}
 
 
 
-            {% if current_user.has_role('Administrador') %}
+            {% if is_admin %}
             <fieldset class="form-group full">
                 <legend>Roles</legend>
                 <div class="roles-list">
@@ -339,14 +341,12 @@
     const form = document.getElementById('editUserForm');
     const fullName = document.getElementById('nombre_apellido');
     const email = document.getElementById('email');
-    const password = document.getElementById('password');
     const roles = document.querySelectorAll('input[name="roles"]');
     const saveStatus = document.getElementById('saveStatus');
 
     const messages = {
         nombre: document.getElementById('nombreError'),
         email: document.getElementById('emailError'),
-        password: document.getElementById('passwordError'),
         roles: document.getElementById('rolesError')
     };
 
@@ -354,7 +354,9 @@
         if (input) {
             input.classList.toggle('error', Boolean(message));
         }
-        messageElement.textContent = message;
+        if (messageElement) {
+            messageElement.textContent = message;
+        }
     }
 
     function selectedRolesCount() {
@@ -368,7 +370,6 @@
 
         setError(fullName, messages.nombre, '');
         setError(email, messages.email, '');
-        setError(password, messages.password, '');
         if (messages.roles) messages.roles.textContent = '';
 
         if (!fullNameValue) {
@@ -379,7 +380,7 @@
             valid = false;
         }
 
-        if (email.value.trim() && !email.validity.valid) {
+        if (email && email.value.trim() && !email.validity.valid) {
             setError(email, messages.email, 'Ingresá un e-mail válido.');
             valid = false;
         }
@@ -402,7 +403,7 @@
         saveStatus.classList.add('visible');
     });
 
-    [fullName, email, ...roles].forEach(field => {
+    [fullName, email, ...roles].filter(Boolean).forEach(field => {
         field.addEventListener('input', () => {
             saveStatus.classList.remove('visible');
             validateEditForm();
