@@ -13,6 +13,7 @@ from app.models import Dispositivo  # noqa: E402
 def build_parser():
     parser = argparse.ArgumentParser(description='Crea un ESP32 vendible en Vision.')
     parser.add_argument('--device-id', default=None, help='Ej: ESP32-8F3A91')
+    parser.add_argument('--device-secret', default=None, help='Secreto ya grabado en el ESP32')
     parser.add_argument('--activation-code', default=None, help='Codigo impreso/QR')
     return parser
 
@@ -20,7 +21,7 @@ def build_parser():
 def main():
     args = build_parser().parse_args()
     device_id = (args.device_id or f"ESP32-{secrets.token_hex(3).upper()}").upper()
-    device_secret = secrets.token_urlsafe(32)
+    device_secret = args.device_secret or secrets.token_urlsafe(32)
     activation_code = args.activation_code or f"{secrets.randbelow(900000) + 100000}"
 
     app = create_app()

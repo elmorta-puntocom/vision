@@ -67,7 +67,7 @@ NORMAL_BLINK_MAX_SECONDS = 0.30
 # Cambia esta IP por la que imprime el ESP32 en el Monitor Serial.
 # Tambien puedes configurarla sin editar el archivo:
 #   PowerShell: $env:VISION_ESP32_IP="192.168.2.130"
-ESP32_IP = os.getenv("VISION_ESP32_IP", "192.168.2.121")
+ESP32_IP = os.getenv("VISION_ESP32_IP", "192.168.2.154")
 ESP32_TIMEOUT_SECONDS = 0.8
 
 sys.path.insert(0, str(MODEL_DIR))
