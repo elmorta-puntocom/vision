@@ -399,11 +399,9 @@
         </div>
         <div class="dash-actions">
             <div class="dash-meta">{{ current_user.email }}</div>
-{% if current_user.has_role('Administrador') %}
-<a class="dash-action-btn" href="{{ url_for('main.editar_usuario', user_id=current_user.id) }}">
-    Modificar usuario
-</a>
-{% endif %}
+            <a class="dash-action-btn" href="{{ url_for('main.editar_usuario', user_id=current_user.id) }}">
+                Modificar usuario
+            </a>
             <a class="dash-action-btn outline" href="{{ url_for('main.dispositivos') }}">
                 Mis dispositivos
             </a>
