@@ -139,6 +139,44 @@ def contar_pendientes_usuario(usuario_id):
         ).scalar_one()
 
 
+def registrar_deteccion_mysql(
+    usuario_id,
+    tipo_evento,
+    video_path,
+    valor_ear=None,
+    valor_pitch=None,
+    duracion_alerta=None,
+):
+    """Guarda la deteccion en MySQL y actualiza estadisticas del usuario."""
+    det = Deteccion(
+        usuario_id=usuario_id,
+        tipo_evento=tipo_evento,
+        video_path=video_path,
+        valor_ear=valor_ear,
+        valor_pitch=valor_pitch,
+        duracion_alerta=duracion_alerta,
+    )
+    db.session.add(det)
+    db.session.flush()
+
+    stats = EstadisticaSeguridad.query.filter_by(usuario_id=usuario_id).first()
+    if not stats:
+        stats = EstadisticaSeguridad(usuario_id=usuario_id)
+        db.session.add(stats)
+        db.session.flush()
+
+    stats.total_eventos = (stats.total_eventos or 0) + 1
+    stats.score_conduccion = max(0.0, (stats.score_conduccion or 100.0) - 2.0)
+    stats.ultima_actualizacion = datetime.utcnow()
+
+    db.session.commit()
+    logger.info(
+        f'[MYSQL] Deteccion guardada -> usuario {usuario_id}, '
+        f'evento: {tipo_evento}, id={det.id}'
+    )
+    return det, stats
+
+
 def mysql_disponible():
     """Devuelve True si MySQL responde."""
     try:
@@ -175,24 +213,14 @@ def sincronizar_pendientes():
     sincronizadas = 0
     for row in pendientes:
         try:
-            det = Deteccion(
+            det, _ = registrar_deteccion_mysql(
                 usuario_id=row.usuario_id,
-                fecha_hora=datetime.strptime(row.fecha_hora, '%Y-%m-%d %H:%M:%S'),
                 tipo_evento=row.tipo_evento,
                 video_path=row.video_path,
                 valor_ear=row.valor_ear,
                 valor_pitch=row.valor_pitch,
                 duracion_alerta=row.duracion_alerta,
             )
-            db.session.add(det)
-            db.session.flush()
-
-            stats = EstadisticaSeguridad.query.filter_by(usuario_id=row.usuario_id).first()
-            if stats:
-                stats.total_eventos += 1
-                stats.score_conduccion = max(0.0, stats.score_conduccion - 2.0)
-
-            db.session.commit()
 
             with _engine().connect() as offline_conn:
                 offline_conn.execute(

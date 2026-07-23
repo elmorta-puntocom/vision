@@ -1,12 +1,82 @@
-#define BUZZER 19
+#include <WiFi.h>
+#include <WebServer.h>
+
+const char* SSID = "¿quien lo diria?";
+const char* PASSWORD = "povwhenbut";
+
+// Pines reales solicitados:
+// P23 controla el motor vibrador.
+// P22 controla el buzzer activo.
+const int PIN_MOTOR = 23;
+const int PIN_BUZZER = 22;
+
+WebServer server(80);
+
+bool alarmaActiva = false;
+
+void aplicarAlarma(bool activar) {
+  alarmaActiva = activar;
+
+  digitalWrite(PIN_MOTOR, activar ? HIGH : LOW);
+  digitalWrite(PIN_BUZZER, activar ? HIGH : LOW);
+
+  Serial.println(activar ? "Alarma ACTIVADA" : "Alarma DESACTIVADA");
+}
+
+void responderEstado() {
+  String estado = alarmaActiva ? "ON" : "OFF";
+  server.send(200, "text/plain", "ESP32 OK - Alarma: " + estado);
+}
+
+void alertaOn() {
+  aplicarAlarma(true);
+  server.send(200, "text/plain", "Alerta ACTIVADA");
+}
+
+void alertaOff() {
+  aplicarAlarma(false);
+  server.send(200, "text/plain", "Alerta DESACTIVADA");
+}
+
+void rutaNoEncontrada() {
+  server.send(404, "text/plain", "Ruta no encontrada");
+}
 
 void setup() {
-  pinMode(BUZZER, OUTPUT);
+  Serial.begin(115200);
+
+  pinMode(PIN_MOTOR, OUTPUT);
+  pinMode(PIN_BUZZER, OUTPUT);
+  aplicarAlarma(false);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+
+  WiFi.begin(SSID, PASSWORD);
+
+  Serial.println();
+  Serial.print("Conectando");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("Conectado");
+  Serial.print("IP del ESP32: ");
+  Serial.println(WiFi.localIP());
+
+  server.on("/", responderEstado);
+  server.on("/estado", responderEstado);
+  server.on("/alerta_on", alertaOn);
+  server.on("/alerta_off", alertaOff);
+  server.onNotFound(rutaNoEncontrada);
+
+  server.begin();
+  Serial.println("Servidor HTTP iniciado en puerto 80");
 }
 
 void loop() {
-  digitalWrite(BUZZER, HIGH);
-  delay(1000);
-  digitalWrite(BUZZER, LOW);
-  delay(1000);
+  server.handleClient();
 }

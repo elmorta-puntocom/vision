@@ -14,7 +14,7 @@ from flask import (
     redirect,
     render_template,
     request,
-    send_from_directory,
+    send_file,
     url_for,
 )
 from flask_login import current_user, login_required, login_user, logout_user
@@ -35,6 +35,7 @@ from .services import (
     contar_pendientes_usuario,
     guardar_deteccion_offline,
     mysql_disponible,
+    registrar_deteccion_mysql,
 )
 
 
@@ -484,9 +485,16 @@ def serve_video(det_id):
     if det.usuario_id != current_user.id:
         abort(403)
 
-    directory = os.path.dirname(det.video_path)
-    filename = os.path.basename(det.video_path)
-    return send_from_directory(directory, filename)
+    video_path = os.path.abspath(det.video_path)
+    if not os.path.isfile(video_path):
+        abort(404)
+
+    return send_file(
+        video_path,
+        mimetype='video/mp4',
+        conditional=True,
+        download_name=os.path.basename(video_path),
+    )
 
 
 @bp.route('/api/esp32/heartbeat', methods=['POST'])
@@ -593,19 +601,27 @@ def api_deteccion():
     try:
         device_id = _clean_device_id(data.get('device_id'))
         dispositivo = None
+        usuario_id = data.get('usuario_id')
+
         if device_id:
             dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
-            if not dispositivo or dispositivo.usuario_id != int(data['usuario_id']):
-                return {'status': 'error', 'message': 'device_not_owned_by_user'}, 403
+            if not dispositivo:
+                return {'status': 'error', 'message': 'device_not_registered'}, 404
+            if not dispositivo.usuario_id:
+                return {'status': 'error', 'message': 'device_not_linked'}, 409
+            usuario_id = dispositivo.usuario_id
+        elif not usuario_id:
+            return {'status': 'error', 'message': 'missing_usuario_or_device'}, 400
 
-        guardar_deteccion_offline(
-            usuario_id=data['usuario_id'],
+        det, stats = registrar_deteccion_mysql(
+            usuario_id=int(usuario_id),
             tipo_evento=data['tipo_evento'],
-            video_path=data['video_path'],
+            video_path=data.get('video_path') or 'sin_video',
             valor_ear=data.get('valor_ear'),
             valor_pitch=data.get('valor_pitch'),
             duracion_alerta=data.get('duracion_alerta'),
         )
+
         if dispositivo:
             db.session.add(DispositivoEvento(
                 dispositivo_id=dispositivo.id,
@@ -613,8 +629,17 @@ def api_deteccion():
                 value=data['tipo_evento'],
             ))
             db.session.commit()
-        return {'status': 'ok', 'message': 'Detección guardada localmente.'}, 201
+
+        return {
+            'status': 'ok',
+            'message': 'Deteccion guardada en MySQL.',
+            'deteccion_id': det.id,
+            'usuario_id': int(usuario_id),
+            'total_eventos': stats.total_eventos,
+            'score_conduccion': stats.score_conduccion,
+        }, 201
     except Exception as e:
+        db.session.rollback()
         logger.error(f'[API] Error al guardar detección: {e}')
         return {'status': 'error', 'message': str(e)}, 500
 

@@ -1,11 +1,14 @@
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import os
 from pathlib import Path
+import queue
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -67,8 +70,20 @@ NORMAL_BLINK_MAX_SECONDS = 0.30
 # Cambia esta IP por la que imprime el ESP32 en el Monitor Serial.
 # Tambien puedes configurarla sin editar el archivo:
 #   PowerShell: $env:VISION_ESP32_IP="192.168.2.130"
-ESP32_IP = os.getenv("VISION_ESP32_IP", "192.168.2.154")
+ESP32_IP = os.getenv("VISION_ESP32_IP", "10.237.3.214")
 ESP32_TIMEOUT_SECONDS = 0.8
+VISION_SERVER_URL = os.getenv("VISION_SERVER_URL", "http://127.0.0.1:5050").rstrip("/")
+VISION_API_KEY = os.getenv("VISION_API_KEY", "vision-internal-key")
+VISION_DEVICE_ID = os.getenv("VISION_DEVICE_ID", "ESP32-657593")
+DETECTION_REPORT_COOLDOWN_SECONDS = 20.0
+
+BLACKBOX_PRE_EVENT_SECONDS = 10.0
+BLACKBOX_CONFIRMATION_SECONDS = 0.75
+BLACKBOX_POST_EVENT_SECONDS = 10.0
+BLACKBOX_MIN_EVENT_SECONDS = 10.0
+BLACKBOX_OUTPUT_DIR = BASE_DIR / "evidencias"
+BLACKBOX_QUEUE_MAX_FRAMES = int(os.getenv("VISION_BLACKBOX_QUEUE_MAX_FRAMES", "900"))
+DEFAULT_RECORDING_FPS = 20.0
 
 sys.path.insert(0, str(MODEL_DIR))
 from model.biometrics import calculate_eye_aspect_ratio, estimate_head_pitch # noqa: E402
@@ -126,6 +141,123 @@ class Esp32AlarmController:
             self.alarma_activada = False
 
 
+def _float_or_none(value):
+    if value is None:
+        return None
+    return float(value)
+
+
+def tipo_evento_from_decision(decision):
+    if decision.eye_drowsy and decision.head_drowsy:
+        return "Ambos"
+    if decision.eye_drowsy:
+        return "Ojos Cerrados"
+    if decision.head_drowsy:
+        return "Cabeceo"
+    return None
+
+
+@dataclass
+class RecordedDrowsinessEvent:
+    tipo_evento: str
+    video_path: str
+    valor_ear: float | None
+    valor_pitch: float | None
+    duracion_alerta: float
+    estado: str
+    confianza: float | None
+    video_seconds: float
+
+
+class DetectionReporter:
+    """Registra en el backend un evento por episodio de somnolencia."""
+
+    def __init__(self):
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._active_reported = False
+        self._last_report_at = 0.0
+
+    def update(self, somnolencia_detectada, decision, eye_evidence, head_evidence):
+        if not somnolencia_detectada:
+            self._active_reported = False
+            return
+
+        now = time.monotonic()
+        if self._active_reported:
+            return
+        if now - self._last_report_at < DETECTION_REPORT_COOLDOWN_SECONDS:
+            return
+
+        tipo_evento = tipo_evento_from_decision(decision)
+        if not tipo_evento:
+            return
+
+        self._active_reported = True
+        self._last_report_at = now
+        self._executor.submit(
+            self._send,
+            self._build_event(
+                tipo_evento,
+                "sin_video",
+                decision,
+                eye_evidence,
+                head_evidence,
+            ),
+        )
+
+    def report_event(self, event):
+        self._executor.submit(self._send, event)
+
+    def _build_event(self, tipo_evento, video_path, decision, eye_evidence, head_evidence):
+        duracion_alerta = max(
+            _float_or_none(getattr(eye_evidence, "closed_seconds", None)) or 0.0,
+            _float_or_none(getattr(eye_evidence, "partial_seconds", None)) or 0.0,
+            _float_or_none(getattr(head_evidence, "drowsy_seconds", None)) or 0.0,
+        )
+        return RecordedDrowsinessEvent(
+            tipo_evento=tipo_evento,
+            video_path=video_path,
+            valor_ear=_float_or_none(getattr(eye_evidence, "ear", None)),
+            valor_pitch=_float_or_none(getattr(head_evidence, "pitch", None)),
+            duracion_alerta=duracion_alerta,
+            estado=decision.state,
+            confianza=_float_or_none(decision.confidence),
+            video_seconds=0.0,
+        )
+
+    def _send(self, event):
+        payload = {
+            "api_key": VISION_API_KEY,
+            "device_id": VISION_DEVICE_ID,
+            "tipo_evento": event.tipo_evento,
+            "video_path": event.video_path,
+            "valor_ear": event.valor_ear,
+            "valor_pitch": event.valor_pitch,
+            "duracion_alerta": event.duracion_alerta,
+            "estado": event.estado,
+            "confianza": event.confianza,
+            "duracion_video": event.video_seconds,
+        }
+
+        url = f"{VISION_SERVER_URL}/api/deteccion"
+        try:
+            response = requests.post(url, json=payload, timeout=3.0)
+            response.raise_for_status()
+            data = response.json()
+            print(
+                "[API] Deteccion registrada "
+                f"id={data.get('deteccion_id')} usuario={data.get('usuario_id')} "
+                f"total={data.get('total_eventos')} score={data.get('score_conduccion')}"
+            )
+        except requests.exceptions.RequestException as exc:
+            print(f"[API] No se pudo registrar deteccion en {url}: {exc}")
+        except ValueError:
+            print(f"[API] Respuesta no JSON al registrar deteccion: {response.text}")
+
+    def cerrar(self):
+        self._executor.shutdown(wait=True, cancel_futures=False)
+
+
 class PredictionSmoother:
     """Smooths predictions by averaging recent class probabilities."""
 
@@ -178,6 +310,402 @@ class DetectionDecision:
     confidence: float
     head_drowsy: bool
     eye_drowsy: bool
+
+
+def _safe_float(value):
+    return None if value is None else float(value)
+
+
+def merge_event_types(current, new):
+    if not new:
+        return current
+    if not current:
+        return new
+    if current == new:
+        return current
+    return "Ambos"
+
+
+def driver_recovered(face_detected, decision, eye_evidence, head_evidence):
+    if not face_detected:
+        return False
+    if decision.head_drowsy or decision.eye_drowsy:
+        return False
+    if eye_evidence is None or eye_evidence.state != "Ojos abiertos":
+        return False
+    if head_evidence is None or head_evidence.pitch_delta is None:
+        return False
+    return abs(head_evidence.pitch_delta) < HEAD_PITCH_DELTA_THRESHOLD
+
+
+class AsyncVideoWriter:
+    """Writes the final MP4 on a worker thread so detection stays responsive."""
+
+    def __init__(self, output_path, fps, frame_size, on_finished):
+        self.output_path = Path(output_path)
+        self.fps = fps if fps and fps > 1.0 else DEFAULT_RECORDING_FPS
+        self.frame_size = frame_size
+        self.on_finished = on_finished
+        self._queue = queue.Queue(maxsize=BLACKBOX_QUEUE_MAX_FRAMES)
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="BlackBoxVideoWriter",
+        )
+        self._started = False
+        self._closed = False
+        self._dropped_frames = 0
+        self._last_drop_log_at = 0.0
+
+    def start(self):
+        if self._started:
+            return
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._thread.start()
+        self._started = True
+
+    def write(self, frame):
+        if self._closed:
+            return
+        if not self._started:
+            self.start()
+        try:
+            self._queue.put_nowait(frame.copy())
+        except queue.Full:
+            self._dropped_frames += 1
+            now = time.monotonic()
+            if now - self._last_drop_log_at >= 3.0:
+                self._last_drop_log_at = now
+                print(
+                    "[CAJA_NEGRA] Cola de video llena; "
+                    f"frames descartados={self._dropped_frames}"
+                )
+
+    def write_many(self, frames):
+        for frame in frames:
+            self.write(frame)
+
+    def close(self, event_data=None):
+        if self._closed:
+            return
+        self._closed = True
+        self.event_data = event_data
+        if not self._started:
+            self.start()
+        threading.Thread(
+            target=self._queue.put,
+            args=(None,),
+            daemon=True,
+            name="BlackBoxVideoWriterCloser",
+        ).start()
+
+    def join(self):
+        if self._started:
+            self._thread.join()
+
+    def _run(self):
+        writer = None
+        frame_count = 0
+        success = False
+        error = None
+        try:
+            writer = self._open_writer()
+            if not writer.isOpened():
+                raise RuntimeError(f"No se pudo crear el video: {self.output_path}")
+
+            while True:
+                frame = self._queue.get()
+                if frame is None:
+                    break
+                if frame.shape[1] != self.frame_size[0] or frame.shape[0] != self.frame_size[1]:
+                    frame = cv2.resize(frame, self.frame_size)
+                writer.write(frame)
+                frame_count += 1
+            success = frame_count > 0
+        except Exception as exc:
+            error = exc
+            print(f"[CAJA_NEGRA] Error escribiendo video: {exc}")
+        finally:
+            if writer is not None:
+                writer.release()
+            if self.on_finished:
+                self.on_finished(
+                    self.output_path,
+                    success,
+                    frame_count,
+                    frame_count / float(self.fps) if self.fps else 0.0,
+                    self._dropped_frames,
+                    error,
+                    getattr(self, "event_data", None),
+                )
+
+    def _open_writer(self):
+        for codec in ("avc1", "H264", "mp4v"):
+            fourcc = cv2.VideoWriter_fourcc(*codec)
+            writer = cv2.VideoWriter(
+                str(self.output_path),
+                fourcc,
+                float(self.fps),
+                self.frame_size,
+            )
+            if writer.isOpened():
+                print(f"[CAJA_NEGRA] Codec de video activo: {codec}")
+                return writer
+            writer.release()
+
+        return cv2.VideoWriter()
+
+
+class BlackBoxRecorder:
+    """Keeps a RAM pre-buffer and records only confirmed drowsiness events."""
+
+    def __init__(
+        self,
+        reporter,
+        pre_event_seconds=BLACKBOX_PRE_EVENT_SECONDS,
+        confirmation_seconds=BLACKBOX_CONFIRMATION_SECONDS,
+        post_event_seconds=BLACKBOX_POST_EVENT_SECONDS,
+        min_event_seconds=BLACKBOX_MIN_EVENT_SECONDS,
+        output_dir=BLACKBOX_OUTPUT_DIR,
+    ):
+        self.reporter = reporter
+        self.pre_event_seconds = pre_event_seconds
+        self.confirmation_seconds = confirmation_seconds
+        self.post_event_seconds = post_event_seconds
+        self.min_event_seconds = min_event_seconds
+        self.output_dir = Path(output_dir)
+        self.pre_buffer = deque()
+        self.candidate_started_at = None
+        self.candidate_pre_frames = []
+        self.recording = False
+        self.event_started_at = None
+        self.last_drowsy_at = None
+        self.normal_started_at = None
+        self.event_type = None
+        self.event_state = None
+        self.event_confidence = None
+        self.event_ear = None
+        self.event_pitch = None
+        self.writer = None
+        self._writers_to_join = []
+
+    def update(
+        self,
+        frame,
+        now,
+        raw_drowsy,
+        recovered,
+        decision,
+        eye_evidence,
+        head_evidence,
+        fps,
+    ):
+        self._append_pre_frame(now, frame)
+
+        if self.recording:
+            self._record_active_frame(
+                frame,
+                now,
+                raw_drowsy,
+                recovered,
+                decision,
+                eye_evidence,
+                head_evidence,
+            )
+            return raw_drowsy
+
+        if not raw_drowsy:
+            self._cancel_candidate()
+            return False
+
+        if self.candidate_started_at is None:
+            self.candidate_started_at = now
+            self.candidate_pre_frames = self._frames_between(
+                now - self.pre_event_seconds,
+                now,
+                include_end=False,
+            )
+            return False
+
+        if now - self.candidate_started_at < self.confirmation_seconds:
+            return False
+
+        self._start_recording(
+            frame,
+            now,
+            decision,
+            eye_evidence,
+            head_evidence,
+            fps,
+        )
+        return True
+
+    def close(self):
+        if self.recording:
+            print("[CAJA_NEGRA] Cerrando grabacion activa por salida del programa.")
+            self._finish_recording()
+        self._cancel_candidate()
+        for writer in self._writers_to_join:
+            writer.join()
+        self._writers_to_join.clear()
+
+    def _append_pre_frame(self, now, frame):
+        self.pre_buffer.append((now, frame.copy()))
+        min_timestamp = now - self.pre_event_seconds
+        while self.pre_buffer and self.pre_buffer[0][0] < min_timestamp:
+            self.pre_buffer.popleft()
+
+    def _frames_between(self, start, end, include_end=True):
+        frames = []
+        for timestamp, frame in self.pre_buffer:
+            if timestamp < start:
+                continue
+            if include_end:
+                if timestamp <= end:
+                    frames.append(frame)
+            elif timestamp < end:
+                frames.append(frame)
+        return frames
+
+    def _cancel_candidate(self):
+        self.candidate_started_at = None
+        self.candidate_pre_frames = []
+
+    def _start_recording(self, frame, now, decision, eye_evidence, head_evidence, fps):
+        frame_size = (frame.shape[1], frame.shape[0])
+        output_path = self._make_output_path()
+        self.event_started_at = self.candidate_started_at or now
+        self.last_drowsy_at = now
+        self.normal_started_at = None
+        self.recording = True
+        self.event_type = None
+        self.event_state = None
+        self.event_confidence = None
+        self.event_ear = None
+        self.event_pitch = None
+        self._update_event_metadata(decision, eye_evidence, head_evidence)
+
+        self.writer = AsyncVideoWriter(
+            output_path=output_path,
+            fps=fps,
+            frame_size=frame_size,
+            on_finished=self._on_video_finished,
+        )
+        initial_frames = list(self.candidate_pre_frames)
+        initial_frames.extend(self._frames_between(self.event_started_at, now, include_end=True))
+        self.writer.write_many(initial_frames)
+        self._cancel_candidate()
+        print(
+            "[CAJA_NEGRA] Evento confirmado; grabando evidencia en "
+            f"{output_path}"
+        )
+
+    def _record_active_frame(
+        self,
+        frame,
+        now,
+        raw_drowsy,
+        recovered,
+        decision,
+        eye_evidence,
+        head_evidence,
+    ):
+        if self.writer:
+            self.writer.write(frame)
+
+        if raw_drowsy:
+            self.last_drowsy_at = now
+            self.normal_started_at = None
+            self._update_event_metadata(decision, eye_evidence, head_evidence)
+            return
+
+        if recovered:
+            if self.normal_started_at is None:
+                self.normal_started_at = now
+        else:
+            self.normal_started_at = None
+
+        enough_total_time = (now - self.event_started_at) >= self.min_event_seconds
+        enough_post_time = (
+            self.normal_started_at is not None
+            and (now - self.normal_started_at) >= self.post_event_seconds
+        )
+        if enough_total_time and enough_post_time:
+            self._finish_recording()
+
+    def _update_event_metadata(self, decision, eye_evidence, head_evidence):
+        self.event_type = merge_event_types(self.event_type, tipo_evento_from_decision(decision))
+        self.event_state = decision.state
+        self.event_confidence = _safe_float(decision.confidence)
+        ear = _safe_float(getattr(eye_evidence, "ear", None))
+        pitch = _safe_float(getattr(head_evidence, "pitch", None))
+        if ear is not None:
+            self.event_ear = ear
+        if pitch is not None:
+            self.event_pitch = pitch
+
+    def _finish_recording(self):
+        writer = self.writer
+        event_data = self._build_recorded_event(video_path="" if writer is None else str(writer.output_path))
+        self.writer = None
+        self.recording = False
+        self.normal_started_at = None
+        self.event_started_at = None
+        self.last_drowsy_at = None
+        self.event_type = None
+        self.event_state = None
+        self.event_confidence = None
+        self.event_ear = None
+        self.event_pitch = None
+        if writer:
+            writer.close(event_data)
+            self._writers_to_join.append(writer)
+        print("[CAJA_NEGRA] Grabacion finalizada; cerrando MP4 en segundo plano.")
+
+    def _make_output_path(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        device_id = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in VISION_DEVICE_ID)
+        return self.output_dir / f"somnolencia_{device_id}_{timestamp}.mp4"
+
+    def _build_recorded_event(self, video_path, video_seconds=0.0):
+        alert_duration = 0.0
+        if self.event_started_at is not None and self.last_drowsy_at is not None:
+            alert_duration = max(0.0, self.last_drowsy_at - self.event_started_at)
+
+        return RecordedDrowsinessEvent(
+            tipo_evento=self.event_type or "Ojos Cerrados",
+            video_path=video_path,
+            valor_ear=self.event_ear,
+            valor_pitch=self.event_pitch,
+            duracion_alerta=alert_duration,
+            estado=self.event_state or "Somnolencia",
+            confianza=self.event_confidence,
+            video_seconds=video_seconds,
+        )
+
+    def _on_video_finished(
+        self,
+        path,
+        success,
+        frame_count,
+        video_seconds,
+        dropped_frames,
+        error,
+        event_data,
+    ):
+        if not success:
+            print(f"[CAJA_NEGRA] No se genero evidencia valida para {path}")
+            return
+
+        event = event_data or self._build_recorded_event(str(path.resolve()), video_seconds)
+        event.video_path = str(path.resolve())
+        event.video_seconds = video_seconds
+        print(
+            "[CAJA_NEGRA] MP4 listo "
+            f"frames={frame_count} duracion={video_seconds:.2f}s "
+            f"descartados={dropped_frames}; reportando al servidor."
+        )
+        self.reporter.report_event(event)
 
 
 class EyeClosureTracker:
@@ -1061,6 +1589,11 @@ def run_realtime_detection():
     eye_tracker = EyeClosureTracker()
     head_tracker = HeadNodTracker()
     alarm_controller = Esp32AlarmController()
+    detection_reporter = DetectionReporter()
+    blackbox_recorder = BlackBoxRecorder(detection_reporter)
+    recording_fps = cap.get(cv2.CAP_PROP_FPS) or DEFAULT_RECORDING_FPS
+    if recording_fps <= 1.0 or recording_fps > 120.0:
+        recording_fps = DEFAULT_RECORDING_FPS
 
     mp_holistic = mp.solutions.holistic
     mp_drawing = mp.solutions.drawing_utils
@@ -1205,7 +1738,23 @@ def run_realtime_detection():
                             )
 
                 somnolencia_detectada = decision.head_drowsy or decision.eye_drowsy
-                alarm_controller.update(somnolencia_detectada)
+                recuperado = driver_recovered(
+                    face_detected,
+                    decision,
+                    eye_evidence,
+                    head_evidence,
+                )
+                alarma_confirmada = blackbox_recorder.update(
+                    frame,
+                    now,
+                    somnolencia_detectada,
+                    recuperado,
+                    decision,
+                    eye_evidence,
+                    head_evidence,
+                    recording_fps,
+                )
+                alarm_controller.update(alarma_confirmada)
 
                 cv2.imshow("Deteccion de Somnolencia", frame)
                 key = cv2.waitKey(1) & 0xFF
@@ -1213,6 +1762,8 @@ def run_realtime_detection():
                     break
     finally:
         alarm_controller.apagar_y_cerrar()
+        blackbox_recorder.close()
+        detection_reporter.cerrar()
         cap.release()
         cv2.destroyAllWindows()
 

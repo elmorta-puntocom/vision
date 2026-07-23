@@ -555,10 +555,14 @@
                 <td>{{ "%.1f"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}°</td>
                 <td>{{ "%.1f"|format(det.duracion_alerta) if det.duracion_alerta is not none else '—' }}s</td>
                 <td>
+                    {% if det.video_path and det.video_path != 'sin_video' %}
                     <a href="{{ url_for('main.serve_video', det_id=det.id) }}"
                        style="color: var(--accent); font-size: 0.7rem; text-decoration: none;">
                         ▶ Ver clip
                     </a>
+                    {% else %}
+                    <span style="color: var(--text-muted); font-size: 0.7rem;">Sin clip</span>
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}

@@ -117,3 +117,8 @@ Your data will help train a more accurate and reliable drowsiness detection mode
 cd C:\Users\juanc\vision\vision
 .venv\Scripts\activate
 python deteccion_tiempo_real.py
+
+
+cd C:\Users\juanc\vision\vision
+$env:VISION_DEVICE_ID="ESP32-PRUEBA"
+python deteccion_tiempo_real.py
