@@ -5,12 +5,15 @@
 {% block extra_styles %}
 <style>
     .devices-page {
-        padding: 5rem;
-        max-width: 1100px;
+        padding: 4rem 5rem 5rem;
+        max-width: 1200px;
+        margin: 0 auto;
     }
 
     .devices-header {
-        margin-bottom: 2rem;
+        margin-bottom: 2.5rem;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 1.5rem;
     }
 
     .devices-kicker {
@@ -19,18 +22,30 @@
         letter-spacing: 0.2em;
         text-transform: uppercase;
         color: var(--accent);
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .devices-kicker::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+        border-radius: 50%;
     }
 
     .devices-title {
-        font-size: 2rem;
+        font-size: 2.2rem;
         font-weight: 800;
         margin-top: 0.4rem;
+        letter-spacing: -0.02em;
     }
 
     .devices-grid {
         display: grid;
-        grid-template-columns: 360px 1fr;
-        gap: 1.5rem;
+        grid-template-columns: 380px 1fr;
+        gap: 2rem;
     }
 
     .device-panel,
@@ -38,35 +53,38 @@
     .empty-devices {
         background: var(--surface);
         border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
     }
 
     .device-panel {
-        padding: 1.5rem;
+        padding: 2rem;
         align-self: start;
     }
 
     .device-panel h2,
     .linked-title {
         font-family: var(--font-mono);
-        font-size: 0.72rem;
-        letter-spacing: 0.16em;
+        font-size: 0.75rem;
+        letter-spacing: 0.18em;
         text-transform: uppercase;
         color: var(--accent);
-        margin-bottom: 1rem;
+        margin-bottom: 1.25rem;
+        font-weight: 700;
     }
 
     .field {
-        margin-bottom: 1rem;
+        margin-bottom: 1.25rem;
     }
 
     .field label {
         display: block;
         font-family: var(--font-mono);
-        font-size: 0.62rem;
-        letter-spacing: 0.12em;
+        font-size: 0.65rem;
+        letter-spacing: 0.15em;
         text-transform: uppercase;
         color: var(--text-muted);
-        margin-bottom: 0.35rem;
+        margin-bottom: 0.45rem;
     }
 
     .field input {
@@ -76,12 +94,15 @@
         border-radius: var(--radius);
         color: var(--text);
         font-family: var(--font-mono);
-        padding: 0.75rem;
+        font-size: 0.85rem;
+        padding: 0.85rem 1rem;
         outline: none;
+        transition: border-color 0.25s, box-shadow 0.25s;
     }
 
     .field input:focus {
         border-color: var(--accent);
+        box-shadow: 0 0 15px rgba(0,229,255,0.2);
     }
 
     .primary-btn,
@@ -92,95 +113,130 @@
         color: var(--bg);
         cursor: pointer;
         font-family: var(--font-mono);
-        font-size: 0.68rem;
-        letter-spacing: 0.12em;
-        padding: 0.7rem 1rem;
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        padding: 0.8rem 1.2rem;
         text-transform: uppercase;
+        font-weight: 700;
+        transition: all 0.25s ease;
+        box-shadow: 0 0 15px rgba(0,229,255,0.2);
+    }
+    .primary-btn:hover,
+    .command-btn:hover {
+        background: transparent;
+        color: var(--accent);
+        box-shadow: 0 0 20px rgba(0,229,255,0.4);
     }
 
     .primary-btn {
         width: 100%;
+        margin-top: 0.5rem;
     }
 
     .command-btn.secondary {
         background: transparent;
         color: var(--accent);
+        border-color: rgba(0,229,255,0.3);
+        box-shadow: none;
+    }
+    .command-btn.secondary:hover {
+        background: var(--accent);
+        color: var(--bg);
+        box-shadow: 0 0 20px rgba(0,229,255,0.4);
     }
 
     .device-list {
         display: grid;
-        gap: 1rem;
+        gap: 1.25rem;
     }
 
     .device-row {
-        padding: 1.25rem;
+        padding: 1.5rem;
+        transition: border-color 0.25s;
     }
+    .device-row:hover { border-color: rgba(0,229,255,0.3); }
 
     .device-row-head {
         align-items: center;
         display: flex;
         justify-content: space-between;
         gap: 1rem;
-        margin-bottom: 0.75rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--border);
     }
 
     .device-id {
         font-family: var(--font-mono);
-        font-size: 1rem;
+        font-size: 1.1rem;
         font-weight: 700;
-        color: var(--text);
+        color: var(--accent);
     }
 
     .device-status {
         font-family: var(--font-mono);
-        font-size: 0.62rem;
-        letter-spacing: 0.12em;
+        font-size: 0.65rem;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
         color: var(--success);
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        background: rgba(0,255,136,0.1);
+        border: 1px solid rgba(0,255,136,0.3);
+        padding: 0.25rem 0.65rem;
+        border-radius: 20px;
+    }
+    .device-status::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--success);
+        box-shadow: 0 0 8px var(--success);
     }
 
     .device-status.offline {
         color: var(--warning);
+        background: rgba(255,170,0,0.1);
+        border-color: rgba(255,170,0,0.3);
+    }
+    .device-status.offline::before {
+        background: var(--warning);
+        box-shadow: 0 0 8px var(--warning);
     }
 
     .device-meta {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.75rem 1rem;
+        gap: 0.85rem 1.25rem;
         color: var(--text-mid);
         font-family: var(--font-mono);
-        font-size: 0.72rem;
+        font-size: 0.75rem;
     }
 
     .device-actions {
         display: flex;
-        gap: 0.75rem;
-        margin-top: 1rem;
+        gap: 0.85rem;
+        margin-top: 1.25rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border);
     }
 
     .empty-devices {
         color: var(--text-muted);
         font-family: var(--font-mono);
-        font-size: 0.75rem;
-        line-height: 1.7;
-        padding: 2rem;
+        font-size: 0.78rem;
+        line-height: 1.75;
+        padding: 2.5rem;
+        text-align: center;
     }
 
     @media (max-width: 900px) {
-        .devices-page {
-            padding: 5rem 1.5rem 3rem;
-        }
-
-        .devices-grid,
-        .device-meta {
-            grid-template-columns: 1fr;
-        }
-
-        .device-row-head,
-        .device-actions {
-            align-items: flex-start;
-            flex-direction: column;
-        }
+        .devices-page { padding: 4rem 1.5rem 3rem; }
+        .devices-grid { grid-template-columns: 1fr; }
+        .device-meta { grid-template-columns: 1fr; }
+        .device-row-head, .device-actions { flex-direction: column; align-items: flex-start; }
     }
 </style>
 {% endblock %}
@@ -188,8 +244,8 @@
 {% block content %}
 <div class="devices-page">
     <div class="devices-header">
-        <div class="devices-kicker">// Vinculacion segura</div>
-        <h1 class="devices-title">Dispositivos Vision</h1>
+        <div class="devices-kicker">// Vinculación Segura IoT</div>
+        <h1 class="devices-title">Dispositivos Vision (ESP32)</h1>
     </div>
 
     <div class="devices-grid">
@@ -200,14 +256,14 @@
                 <input id="device_id" name="device_id" placeholder="ESP32-8F3A91" required>
             </div>
             <div class="field">
-                <label for="activation_code">Codigo de activacion</label>
+                <label for="activation_code">Código de activación</label>
                 <input id="activation_code" name="activation_code" placeholder="742913" required>
             </div>
-            <button class="primary-btn" type="submit">Vincular</button>
+            <button class="primary-btn" type="submit">Vincular Dispositivo</button>
         </form>
 
         <section>
-            <div class="linked-title">Mis dispositivos</div>
+            <div class="linked-title">Mis Dispositivos Vinculados</div>
             {% if dispositivos %}
             <div class="device-list">
                 {% for dispositivo in dispositivos %}
@@ -220,12 +276,12 @@
                         </div>
                     </div>
                     <div class="device-meta">
-                        <div>MAC: {{ dispositivo.mac or 'Sin registrar' }}</div>
-                        <div>IP: {{ dispositivo.ip_address or 'Sin registrar' }}</div>
-                        <div>Firmware: {{ dispositivo.firmware_version or 'N/D' }}</div>
+                        <div>MAC: <span style="color: var(--text);">{{ dispositivo.mac or 'Sin registrar' }}</span></div>
+                        <div>IP: <span style="color: var(--text);">{{ dispositivo.ip_address or 'Sin registrar' }}</span></div>
+                        <div>Firmware: <span style="color: var(--text);">{{ dispositivo.firmware_version or 'N/D' }}</span></div>
                         <div>
-                            Ultima conexion:
-                            {{ dispositivo.last_seen.strftime('%d/%m/%Y %H:%M:%S') if dispositivo.last_seen else 'Nunca' }}
+                            Última conexión:
+                            <span style="color: var(--text);">{{ dispositivo.last_seen.strftime('%d/%m/%Y %H:%M:%S') if dispositivo.last_seen else 'Nunca' }}</span>
                         </div>
                     </div>
                     <div class="device-actions">
@@ -241,7 +297,8 @@
             </div>
             {% else %}
             <div class="empty-devices">
-                No hay ESP32 vinculados a esta cuenta. Encende el dispositivo, espera que haga heartbeat y cargalo con su codigo de activacion.
+                No hay dispositivos ESP32 vinculados a esta cuenta.<br>
+                Encendé el dispositivo, esperá a que haga heartbeat e ingresá su ID con el código de activación.
             </div>
             {% endif %}
         </section>

@@ -6,7 +6,7 @@
 <style>
     /* ── Layout general ── */
     .buy-page {
-        padding: 6rem 5rem 5rem;
+        padding: 4rem 5rem 5rem;
         max-width: 1300px;
         margin: 0 auto;
     }
@@ -15,14 +15,14 @@
     .buy-hero {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 5rem;
+        gap: 4.5rem;
         align-items: start;
         margin-bottom: 5rem;
     }
 
     .buy-hero-left .page-tag {
         font-family: var(--font-mono);
-        font-size: 0.65rem;
+        font-size: 0.68rem;
         letter-spacing: 0.2em;
         text-transform: uppercase;
         color: var(--accent);
@@ -30,12 +30,14 @@
         align-items: center;
         gap: 0.75rem;
         margin-bottom: 1.5rem;
+        font-weight: 700;
     }
     .buy-hero-left .page-tag::before {
         content: '';
-        width: 28px;
+        width: 32px;
         height: 1px;
         background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
     }
 
     .buy-hero-left h1 {
@@ -45,19 +47,21 @@
         letter-spacing: -0.025em;
         margin-bottom: 1.5rem;
     }
-    .buy-hero-left h1 .hi { color: var(--accent); }
+    .buy-hero-left h1 .hi { color: var(--accent); text-shadow: 0 0 25px rgba(0,229,255,0.3); }
 
     .buy-hero-left .tagline {
-        font-size: 0.95rem;
+        font-size: 0.98rem;
         color: var(--text-mid);
-        line-height: 1.8;
-        max-width: 420px;
+        line-height: 1.85;
+        max-width: 440px;
         margin-bottom: 2.5rem;
     }
 
-    /* ── Imágen / visual del producto ── */
+    /* ── Imagen / visual del producto ── */
     .product-visual {
-        background: var(--surface);
+        background: 
+            radial-gradient(circle at 50% 50%, rgba(0,229,255,0.08) 0%, transparent 70%),
+            var(--surface);
         border: 1px solid var(--border);
         aspect-ratio: 4/3;
         display: flex;
@@ -66,6 +70,8 @@
         justify-content: center;
         position: relative;
         overflow: hidden;
+        border-radius: var(--radius);
+        box-shadow: 0 15px 40px rgba(0,0,0,0.35);
     }
 
     .product-visual::before {
@@ -82,39 +88,21 @@
             );
     }
 
-    .product-visual::after {
-        content: '';
-        position: absolute;
-        bottom: -60px;
-        right: -60px;
-        width: 280px;
-        height: 280px;
-        background: radial-gradient(circle, rgba(0, 229, 255, 0.09) 0%, transparent 65%);
-        pointer-events: none;
-    }
-
     .pv-badge {
         position: absolute;
         top: 1rem;
         right: 1rem;
         font-family: var(--font-mono);
-        font-size: 0.6rem;
+        font-size: 0.62rem;
         letter-spacing: 0.15em;
         text-transform: uppercase;
         color: var(--success);
-        border: 1px solid rgba(0,255,136,0.3);
-        padding: 0.3rem 0.7rem;
-        background: rgba(0,255,136,0.07);
-    }
-
-    .pv-icon {
-        position: relative;
-        z-index: 1;
-        margin-bottom: 1.5rem;
-    }
-
-    .pv-icon svg {
-        filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.35));
+        border: 1px solid rgba(0,255,136,0.35);
+        padding: 0.35rem 0.75rem;
+        background: rgba(0,255,136,0.08);
+        border-radius: 20px;
+        box-shadow: 0 0 12px rgba(0,255,136,0.15);
+        font-weight: 700;
     }
 
     .pv-image {
@@ -123,14 +111,14 @@
         width: min(92%, 520px);
         height: auto;
         object-fit: contain;
-        filter: drop-shadow(0 0 24px rgba(0, 229, 255, 0.24)) drop-shadow(0 28px 38px rgba(0,0,0,0.55));
+        filter: drop-shadow(0 0 25px rgba(0, 229, 255, 0.28)) drop-shadow(0 28px 38px rgba(0,0,0,0.6));
         animation: productBreathe 5s ease-in-out infinite;
-        transition: transform 0.3s ease, filter 0.3s ease;
+        transition: transform 0.35s ease, filter 0.35s ease;
     }
 
     .product-visual:hover .pv-image {
-        transform: translateY(-6px) scale(1.02);
-        filter: drop-shadow(0 0 32px rgba(0, 229, 255, 0.34)) drop-shadow(0 34px 42px rgba(0,0,0,0.6));
+        transform: translateY(-8px) scale(1.03);
+        filter: drop-shadow(0 0 35px rgba(0, 229, 255, 0.42)) drop-shadow(0 34px 42px rgba(0,0,0,0.7));
     }
 
     @keyframes productBreathe {
@@ -140,40 +128,47 @@
 
     .pv-label {
         font-family: var(--font-mono);
-        font-size: 0.7rem;
-        letter-spacing: 0.15em;
+        font-size: 0.72rem;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--text-muted);
         position: relative;
         z-index: 1;
+        margin-top: 0.5rem;
     }
 
     .buy-advantage-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 1px;
+        gap: 1.5px;
         background: var(--border);
-        margin-top: 1rem;
+        margin-top: 1.25rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
     }
 
     .buy-advantage {
         background: var(--surface);
-        padding: 1rem;
+        padding: 1.1rem;
+        transition: background 0.25s;
     }
+    .buy-advantage:hover { background: var(--surface2); }
 
     .buy-advantage span {
         display: block;
         font-family: var(--font-mono);
-        font-size: 0.58rem;
+        font-size: 0.6rem;
         letter-spacing: 0.15em;
         text-transform: uppercase;
         color: var(--accent);
         margin-bottom: 0.35rem;
+        font-weight: 700;
     }
 
     .buy-advantage p {
         font-family: var(--font-mono);
-        font-size: 0.68rem;
+        font-size: 0.72rem;
         color: var(--text-mid);
         line-height: 1.55;
     }
@@ -182,15 +177,17 @@
     .price-card {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-top: 2px solid var(--accent);
-        padding: 2.5rem;
+        border-top: 3px solid var(--accent);
+        padding: 2.75rem 2.25rem;
         position: sticky;
         top: 6rem;
+        border-radius: var(--radius);
+        box-shadow: 0 20px 50px rgba(0,0,0,0.4);
     }
 
     .price-card-label {
         font-family: var(--font-mono);
-        font-size: 0.6rem;
+        font-size: 0.65rem;
         letter-spacing: 0.2em;
         text-transform: uppercase;
         color: var(--text-muted);
@@ -213,16 +210,17 @@
 
     .price-amount {
         font-family: var(--font-mono);
-        font-size: 3rem;
+        font-size: 3.2rem;
         font-weight: 700;
-        color: var(--text);
+        color: var(--accent);
         line-height: 1;
         letter-spacing: -0.02em;
+        text-shadow: 0 0 20px rgba(0,229,255,0.25);
     }
 
     .price-period {
         font-family: var(--font-mono);
-        font-size: 0.7rem;
+        font-size: 0.72rem;
         color: var(--text-muted);
         margin-bottom: 1.5rem;
     }
@@ -238,59 +236,61 @@
         list-style: none;
         display: flex;
         flex-direction: column;
-        gap: 0.75rem;
+        gap: 0.8rem;
         margin-bottom: 2rem;
     }
 
     .includes-list li {
         font-family: var(--font-mono);
-        font-size: 0.72rem;
+        font-size: 0.75rem;
         color: var(--text-mid);
         display: flex;
         align-items: center;
-        gap: 0.65rem;
-        line-height: 1.4;
+        gap: 0.75rem;
+        line-height: 1.45;
     }
 
     .includes-list li .check {
         color: var(--success);
         flex-shrink: 0;
-        font-size: 0.8rem;
+        font-weight: bold;
     }
 
     /* Cuotas */
     .installments {
         background: var(--surface2);
         border: 1px solid var(--border);
-        padding: 1rem;
+        padding: 1.1rem 1.25rem;
         margin-bottom: 1.75rem;
         font-family: var(--font-mono);
+        border-radius: var(--radius);
     }
 
     .inst-title {
-        font-size: 0.6rem;
-        letter-spacing: 0.15em;
+        font-size: 0.62rem;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
-        color: var(--text-muted);
-        margin-bottom: 0.6rem;
+        color: var(--accent);
+        margin-bottom: 0.75rem;
+        font-weight: 700;
     }
 
     .inst-options {
         display: flex;
         flex-direction: column;
-        gap: 0.35rem;
+        gap: 0.45rem;
     }
 
     .inst-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        font-size: 0.72rem;
+        font-size: 0.75rem;
     }
 
     .inst-row .cuotas { color: var(--text-mid); }
     .inst-row .valor  { color: var(--text); font-weight: 700; }
-    .inst-row .sin-interes { color: var(--success); font-size: 0.6rem; }
+    .inst-row .sin-interes { color: var(--success); font-size: 0.62rem; font-weight: 700; }
 
     /* Botón MercadoPago */
     .btn-mp {
@@ -300,55 +300,60 @@
         color: #fff;
         border: none;
         font-family: var(--font-mono);
-        font-size: 0.82rem;
+        font-size: 0.85rem;
         font-weight: 700;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.12em;
         text-transform: uppercase;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.25s ease;
         display: flex;
         align-items: center;
         justify-content: center;
         gap: 0.75rem;
         text-decoration: none;
         border-radius: var(--radius);
-        margin-bottom: 0.75rem;
+        margin-bottom: 0.85rem;
+        box-shadow: 0 0 15px rgba(0,158,227,0.3);
     }
 
-    .btn-mp:hover { background: #007ab8; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,158,227,0.3); }
+    .btn-mp:hover { 
+        background: #0084c0; 
+        transform: translateY(-2px); 
+        box-shadow: 0 8px 25px rgba(0,158,227,0.45); 
+    }
 
     .btn-mp-secondary {
         width: 100%;
-        padding: 0.9rem 1.5rem;
+        padding: 0.95rem 1.5rem;
         background: transparent;
         color: var(--text-muted);
         border: 1px solid var(--border);
         font-family: var(--font-mono);
-        font-size: 0.72rem;
-        letter-spacing: 0.08em;
+        font-size: 0.75rem;
+        letter-spacing: 0.1em;
         text-transform: uppercase;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: all 0.25s ease;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 0.6rem;
+        gap: 0.65rem;
         border-radius: var(--radius);
     }
 
-    .btn-mp-secondary:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-mp-secondary:hover { border-color: var(--accent); color: var(--accent); background: rgba(0,229,255,0.04); }
 
     .mp-disclaimer {
         font-family: var(--font-mono);
-        font-size: 0.6rem;
+        font-size: 0.65rem;
         color: var(--text-muted);
         text-align: center;
-        margin-top: 1rem;
+        margin-top: 1.25rem;
         line-height: 1.6;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 0.4rem;
+        gap: 0.45rem;
     }
 
     /* ── Sección especificaciones ── */
@@ -358,7 +363,7 @@
 
     .section-divider {
         font-family: var(--font-mono);
-        font-size: 0.6rem;
+        font-size: 0.68rem;
         letter-spacing: 0.2em;
         text-transform: uppercase;
         color: var(--text-muted);
@@ -367,27 +372,30 @@
         gap: 1rem;
         margin-bottom: 2.5rem;
     }
-    .section-divider::before { content: '//'; color: var(--accent); }
+    .section-divider::before { content: '//'; color: var(--accent); font-weight: bold; }
     .section-divider::after  { content: ''; flex: 1; height: 1px; background: var(--border); }
 
     .specs-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 1px;
+        gap: 1.5px;
         background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
     }
 
     .spec-item {
         background: var(--surface);
-        padding: 1.75rem;
-        transition: background 0.2s;
+        padding: 1.85rem 1.6rem;
+        transition: background 0.25s;
     }
     .spec-item:hover { background: var(--surface2); }
 
     .spec-key {
         font-family: var(--font-mono);
-        font-size: 0.6rem;
-        letter-spacing: 0.15em;
+        font-size: 0.62rem;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--text-muted);
         margin-bottom: 0.5rem;
@@ -395,15 +403,15 @@
 
     .spec-val {
         font-family: var(--font-mono);
-        font-size: 0.9rem;
+        font-size: 0.95rem;
         font-weight: 700;
-        color: var(--text);
+        color: var(--accent);
     }
 
     .spec-sub {
-        font-size: 0.7rem;
+        font-size: 0.72rem;
         color: var(--text-muted);
-        margin-top: 0.2rem;
+        margin-top: 0.25rem;
         font-family: var(--font-mono);
     }
 
@@ -414,18 +422,21 @@
         gap: 1.5px;
         background: var(--border);
         margin-bottom: 4rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
     }
 
     .plan-card {
         background: var(--surface);
-        padding: 2rem;
+        padding: 2.25rem 2rem;
         position: relative;
-        transition: background 0.2s;
+        transition: background 0.25s;
     }
     .plan-card:hover { background: var(--surface2); }
     .plan-card.featured {
-        background: rgba(0, 229, 255, 0.04);
-        border-top: 2px solid var(--accent);
+        background: rgba(0, 229, 255, 0.05);
+        border-top: 3px solid var(--accent);
     }
 
     .plan-badge {
@@ -434,43 +445,45 @@
         left: 50%;
         transform: translateX(-50%);
         font-family: var(--font-mono);
-        font-size: 0.55rem;
-        letter-spacing: 0.15em;
+        font-size: 0.58rem;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         background: var(--accent);
         color: var(--bg);
-        padding: 0.2rem 0.75rem;
+        padding: 0.25rem 0.85rem;
         display: none;
+        font-weight: 700;
     }
     .plan-card.featured .plan-badge { display: block; }
 
     .plan-name {
         font-family: var(--font-mono);
-        font-size: 0.65rem;
-        letter-spacing: 0.15em;
+        font-size: 0.68rem;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--accent);
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.6rem;
+        font-weight: 700;
     }
 
     .plan-title {
-        font-size: 1.1rem;
+        font-size: 1.2rem;
         font-weight: 800;
         margin-bottom: 0.75rem;
         letter-spacing: -0.01em;
     }
 
     .plan-desc {
-        font-size: 0.8rem;
+        font-size: 0.82rem;
         color: var(--text-mid);
-        line-height: 1.7;
+        line-height: 1.75;
         font-family: var(--font-mono);
-        margin-bottom: 1.25rem;
+        margin-bottom: 1.5rem;
     }
 
     .plan-price {
         font-family: var(--font-mono);
-        font-size: 1.4rem;
+        font-size: 1.45rem;
         font-weight: 700;
         color: var(--text);
     }
@@ -480,9 +493,12 @@
     .faq-list {
         display: flex;
         flex-direction: column;
-        gap: 1px;
+        gap: 1.5px;
         background: var(--border);
         margin-bottom: 4rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
     }
 
     .faq-item {
@@ -495,34 +511,35 @@
         border: none;
         color: var(--text);
         font-family: var(--font-sans);
-        font-size: 0.95rem;
+        font-size: 0.98rem;
         font-weight: 600;
         text-align: left;
-        padding: 1.5rem;
+        padding: 1.6rem;
         cursor: pointer;
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 1rem;
-        transition: color 0.2s;
+        transition: color 0.25s, background 0.25s;
     }
-    .faq-question:hover { color: var(--accent); }
+    .faq-question:hover { color: var(--accent); background: var(--surface2); }
 
     .faq-arrow {
         font-family: var(--font-mono);
-        font-size: 0.8rem;
+        font-size: 0.9rem;
         color: var(--accent);
         flex-shrink: 0;
-        transition: transform 0.25s;
+        transition: transform 0.25s ease;
+        font-weight: bold;
     }
     .faq-item.open .faq-arrow { transform: rotate(45deg); }
 
     .faq-answer {
         font-family: var(--font-mono);
-        font-size: 0.78rem;
+        font-size: 0.8rem;
         color: var(--text-mid);
-        line-height: 1.8;
-        padding: 0 1.5rem 1.5rem;
+        line-height: 1.85;
+        padding: 0 1.6rem 1.6rem;
         display: none;
     }
     .faq-item.open .faq-answer { display: block; }
@@ -531,40 +548,39 @@
     .buy-footer-banner {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-left: 3px solid var(--accent);
-        padding: 2rem 2.5rem;
+        border-left: 4px solid var(--accent);
+        padding: 2.25rem 2.75rem;
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 2rem;
+        border-radius: var(--radius);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
     }
 
     .buy-footer-banner-text {
         font-family: var(--font-mono);
-        font-size: 0.78rem;
+        font-size: 0.8rem;
         color: var(--text-mid);
-        line-height: 1.7;
+        line-height: 1.75;
     }
 
     .buy-footer-banner-text strong {
         color: var(--text);
         display: block;
-        font-size: 0.9rem;
-        margin-bottom: 0.25rem;
+        font-size: 0.95rem;
+        margin-bottom: 0.35rem;
     }
 
     /* ── Responsive ── */
     @media (max-width: 900px) {
-        .buy-page { padding: 5rem 1.5rem 3rem; }
+        .buy-page { padding: 4rem 1.5rem 3rem; }
         .buy-hero { grid-template-columns: 1fr; gap: 2.5rem; }
         .specs-grid,
         .plans-grid,
         .buy-advantage-grid { grid-template-columns: 1fr; }
         .price-card { position: static; }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .pv-image { animation: none; }
+        .buy-footer-banner { flex-direction: column; align-items: flex-start; }
     }
 </style>
 {% endblock %}
@@ -575,7 +591,7 @@
     <!-- HERO -->
     <div class="buy-hero">
         <div class="buy-hero-left">
-            <div class="page-tag">Adquirí el sistema</div>
+            <div class="page-tag">Adquirí el sistema Vision</div>
             <h1>
                 VISION<br>
                 <span class="hi">Anti-somnolencia</span><br>
@@ -589,13 +605,13 @@
 
             <!-- Visual producto -->
             <div class="product-visual">
-                <span class="pv-badge">Disponible</span>
+                <span class="pv-badge">Stock Disponible</span>
                 <img
                     class="pv-image"
                     src="{{ url_for('static', filename='img/vision-device.png') }}"
                     alt="Dispositivo Vision Anti-somnolencia"
                 >
-                <div class="pv-label">Vision Device — Unidad estándar</div>
+                <div class="pv-label">Vision Device — Unidad Estándar</div>
             </div>
             <div class="buy-advantage-grid">
                 <div class="buy-advantage">

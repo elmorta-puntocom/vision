@@ -1,12 +1,13 @@
-﻿{% extends 'base.html' %}
+{% extends 'base.html' %}
 
 {% block title %}Dashboard — Vision{% endblock %}
 
 {% block extra_styles %}
 <style>
     .dashboard {
-        padding: 5rem;
-        max-width: 1200px;
+        padding: 4rem 5rem 5rem;
+        max-width: 1280px;
+        margin: 0 auto;
     }
 
     .dash-header {
@@ -14,79 +15,104 @@
         display: flex;
         justify-content: space-between;
         align-items: flex-end;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 2rem;
     }
 
     .dash-greeting {
         font-family: var(--font-mono);
-        font-size: 0.7rem;
+        font-size: 0.72rem;
         letter-spacing: 0.2em;
         text-transform: uppercase;
         color: var(--accent);
         margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .dash-greeting::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+        border-radius: 50%;
     }
 
     .dash-title {
-        font-size: 2rem;
+        font-size: 2.2rem;
         font-weight: 800;
         letter-spacing: -0.02em;
     }
 
     .dash-meta {
         font-family: var(--font-mono);
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         color: var(--text-muted);
     }
 
     .dash-actions {
         display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 0.75rem;
+        flex-direction: row;
+        align-items: center;
+        gap: 0.85rem;
+        flex-wrap: wrap;
     }
 
     .dash-action-btn {
         font-family: var(--font-mono);
-        font-size: 0.68rem;
+        font-size: 0.72rem;
         letter-spacing: 0.12em;
         text-transform: uppercase;
         color: var(--bg);
         background: var(--accent);
         border: 1px solid var(--accent);
         border-radius: var(--radius);
-        padding: 0.65rem 1rem;
+        padding: 0.65rem 1.1rem;
         text-decoration: none;
-        transition: all 0.2s;
+        transition: all 0.25s ease;
+        font-weight: 700;
+        box-shadow: 0 0 12px rgba(0,229,255,0.2);
     }
 
     .dash-action-btn:hover {
         color: var(--accent);
         background: transparent;
+        box-shadow: 0 0 20px rgba(0,229,255,0.35);
+        transform: translateY(-1px);
     }
 
     .dash-action-btn.outline {
-        color: var(--accent);
-        background: transparent;
+        color: var(--text-mid);
+        background: var(--surface2);
+        border-color: var(--border);
+        box-shadow: none;
     }
 
     .dash-action-btn.outline:hover {
-        color: var(--bg);
-        background: var(--accent);
+        color: var(--accent);
+        border-color: var(--accent);
+        background: rgba(0,229,255,0.05);
+        box-shadow: 0 0 15px rgba(0,229,255,0.2);
     }
 
+    /* Device Banner */
     .device-banner {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 220px;
         align-items: center;
-        gap: 2rem;
+        gap: 2.5rem;
         background:
-            linear-gradient(90deg, rgba(0,229,255,0.045), transparent 52%),
+            linear-gradient(90deg, rgba(0,229,255,0.06), transparent 60%),
             var(--surface);
         border: 1px solid var(--border);
-        border-left: 3px solid var(--accent);
-        padding: 1.5rem 2rem;
+        border-left: 4px solid var(--accent);
+        padding: 1.75rem 2.25rem;
         margin-bottom: 2rem;
         overflow: hidden;
         position: relative;
+        border-radius: var(--radius);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
     }
 
     .device-banner::before {
@@ -105,33 +131,39 @@
 
     .device-banner-kicker {
         font-family: var(--font-mono);
-        font-size: 0.6rem;
-        letter-spacing: 0.18em;
+        font-size: 0.65rem;
+        letter-spacing: 0.2em;
         text-transform: uppercase;
         color: var(--accent);
         margin-bottom: 0.45rem;
+        font-weight: 700;
     }
 
     .device-banner-title {
-        font-size: 1.1rem;
+        font-size: 1.25rem;
         font-weight: 800;
         margin-bottom: 0.4rem;
+        color: var(--text);
     }
 
     .device-banner-copy p {
         font-family: var(--font-mono);
-        font-size: 0.72rem;
+        font-size: 0.76rem;
         color: var(--text-mid);
         line-height: 1.7;
-        max-width: 620px;
+        max-width: 650px;
     }
 
     .device-banner-media img {
         width: 100%;
         display: block;
         object-fit: contain;
-        filter: drop-shadow(0 0 18px rgba(0,229,255,0.22));
-        opacity: 0.92;
+        filter: drop-shadow(0 0 20px rgba(0,229,255,0.3));
+        opacity: 0.95;
+        transition: transform 0.3s ease;
+    }
+    .device-banner:hover .device-banner-media img {
+        transform: scale(1.04);
     }
 
     /* Alerta de sincronización pendiente */
@@ -141,16 +173,18 @@
         gap: 1rem;
         background: var(--surface);
         border: 1px solid var(--warning);
-        border-left: 3px solid var(--warning);
-        padding: 1rem 1.5rem;
+        border-left: 4px solid var(--warning);
+        padding: 1.1rem 1.75rem;
         margin-bottom: 2rem;
         font-family: var(--font-mono);
-        font-size: 0.75rem;
+        font-size: 0.78rem;
         color: var(--warning);
+        border-radius: var(--radius);
+        box-shadow: 0 0 20px rgba(255,170,0,0.15);
     }
 
     .sync-banner .sync-icon {
-        font-size: 1rem;
+        font-size: 1.1rem;
         animation: spin 2s linear infinite;
         display: inline-block;
     }
@@ -166,29 +200,36 @@
         gap: 1rem;
         background: var(--surface);
         border: 1px solid var(--border);
-        border-left: 3px solid var(--success);
-        padding: 0.75rem 1.5rem;
+        border-left: 4px solid var(--success);
+        padding: 0.85rem 1.75rem;
         margin-bottom: 2rem;
         font-family: var(--font-mono);
-        font-size: 0.7rem;
-        color: var(--text-muted);
+        font-size: 0.75rem;
+        color: var(--text-mid);
+        border-radius: var(--radius);
     }
 
     /* Stat cards */
     .dash-stats {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 1px;
+        gap: 1.5px;
         background: var(--border);
-        margin-bottom: 3rem;
+        border: 1px solid var(--border);
+        margin-bottom: 3.5rem;
+        border-radius: var(--radius);
+        overflow: hidden;
+        box-shadow: 0 15px 40px rgba(0,0,0,0.3);
     }
 
     .dash-stat {
         background: var(--surface);
-        padding: 2rem;
+        padding: 2.25rem;
         position: relative;
         overflow: hidden;
+        transition: background 0.3s;
     }
+    .dash-stat:hover { background: var(--surface2); }
 
     .dash-stat::after {
         content: '';
@@ -196,35 +237,37 @@
         bottom: 0;
         left: 0;
         right: 0;
-        height: 2px;
+        height: 3px;
         background: var(--accent);
+        box-shadow: 0 0 10px var(--accent);
         transform: scaleX(0);
-        transition: transform 0.3s;
+        transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .dash-stat:hover::after { transform: scaleX(1); }
 
     .dash-stat-label {
         font-family: var(--font-mono);
-        font-size: 0.65rem;
-        letter-spacing: 0.15em;
+        font-size: 0.68rem;
+        letter-spacing: 0.18em;
         text-transform: uppercase;
         color: var(--text-muted);
-        margin-bottom: 0.75rem;
+        margin-bottom: 0.85rem;
         display: block;
     }
 
     .dash-stat-val {
         font-family: var(--font-mono);
-        font-size: 2rem;
+        font-size: 2.4rem;
         font-weight: 700;
         color: var(--text);
+        line-height: 1;
     }
 
     .dash-stat-sub {
         font-family: var(--font-mono);
-        font-size: 0.65rem;
+        font-size: 0.68rem;
         color: var(--text-muted);
-        margin-top: 0.25rem;
+        margin-top: 0.4rem;
     }
 
     /* Account card */
@@ -232,41 +275,53 @@
         background: var(--surface);
         border: 1px solid var(--border);
         padding: 2.5rem;
-        margin-bottom: 2rem;
+        margin-bottom: 3rem;
+        border-radius: var(--radius);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.25);
     }
 
     .account-card h3 {
         font-family: var(--font-mono);
-        font-size: 0.7rem;
-        letter-spacing: 0.2em;
+        font-size: 0.72rem;
+        letter-spacing: 0.22em;
         text-transform: uppercase;
         color: var(--accent);
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.75rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
     }
 
     .account-fields {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 1.5rem;
+        gap: 1.75rem;
     }
 
     .account-field label {
         font-family: var(--font-mono);
-        font-size: 0.6rem;
-        letter-spacing: 0.15em;
+        font-size: 0.62rem;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--text-muted);
         display: block;
-        margin-bottom: 0.4rem;
+        margin-bottom: 0.45rem;
     }
 
     .account-field .val {
-        font-size: 0.9rem;
+        font-size: 0.95rem;
         font-weight: 600;
         color: var(--text);
     }
 
     /* Detections table */
+    .table-container {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+        box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+    }
+
     .detections-table {
         width: 100%;
         border-collapse: collapse;
@@ -275,92 +330,117 @@
 
     .detections-table th {
         font-family: var(--font-mono);
-        font-size: 0.6rem;
-        letter-spacing: 0.15em;
+        font-size: 0.65rem;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--text-muted);
         text-align: left;
-        padding: 0.75rem 1rem;
+        padding: 1rem 1.25rem;
         border-bottom: 1px solid var(--border);
+        background: var(--surface2);
     }
 
     .detections-table td {
         font-family: var(--font-mono);
-        font-size: 0.75rem;
+        font-size: 0.78rem;
         color: var(--text-mid);
-        padding: 0.85rem 1rem;
+        padding: 1rem 1.25rem;
         border-bottom: 1px solid var(--border);
         vertical-align: middle;
+        transition: background 0.2s;
     }
 
     .detections-table tr:last-child td { border-bottom: none; }
-    .detections-table tr:hover td { background: var(--surface2); }
+    .detections-table tr:hover td { background: rgba(0,229,255,0.03); color: var(--text); }
 
     .badge {
         display: inline-block;
-        padding: 0.2rem 0.6rem;
+        padding: 0.25rem 0.7rem;
         font-family: var(--font-mono);
-        font-size: 0.6rem;
-        letter-spacing: 0.1em;
+        font-size: 0.65rem;
+        letter-spacing: 0.12em;
         text-transform: uppercase;
         border-radius: 2px;
+        font-weight: 700;
     }
 
-    .badge-ojos    { background: rgba(255,59,107,0.15); color: var(--danger); border: 1px solid rgba(255,59,107,0.3); }
-    .badge-cabeceo { background: rgba(255,170,0,0.15);  color: var(--warning); border: 1px solid rgba(255,170,0,0.3); }
-    .badge-ambos   { background: rgba(0,229,255,0.1);   color: var(--accent); border: 1px solid rgba(0,229,255,0.2); }
+    .badge-ojos    { background: rgba(255,59,107,0.12); color: var(--danger); border: 1px solid rgba(255,59,107,0.4); box-shadow: 0 0 10px rgba(255,59,107,0.15); }
+    .badge-cabeceo { background: rgba(255,170,0,0.12);  color: var(--warning); border: 1px solid rgba(255,170,0,0.4); box-shadow: 0 0 10px rgba(255,170,0,0.15); }
+    .badge-ambos   { background: rgba(0,229,255,0.12);   color: var(--accent); border: 1px solid rgba(0,229,255,0.3); box-shadow: 0 0 10px rgba(0,229,255,0.15); }
+
+    .video-link {
+        color: var(--accent);
+        font-size: 0.75rem;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.3rem 0.75rem;
+        border: 1px solid rgba(0,229,255,0.3);
+        border-radius: var(--radius);
+        background: rgba(0,229,255,0.05);
+        transition: all 0.25s ease;
+    }
+    .video-link:hover {
+        background: var(--accent);
+        color: var(--bg);
+        box-shadow: 0 0 15px rgba(0,229,255,0.4);
+    }
 
     /* Score bar */
     .score-bar-wrap {
-        margin-top: 0.5rem;
+        margin-top: 0.75rem;
         background: var(--border);
-        height: 4px;
-        border-radius: 2px;
+        height: 6px;
+        border-radius: 3px;
         overflow: hidden;
     }
     .score-bar-fill {
         height: 100%;
-        border-radius: 2px;
-        transition: width 0.5s;
+        border-radius: 3px;
+        transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: 0 0 10px currentColor;
     }
 
     /* Empty state */
     .empty-state {
         background: var(--surface);
         border: 1px solid var(--border);
-        padding: 4rem;
+        padding: 4.5rem 2rem;
         text-align: center;
+        border-radius: var(--radius);
     }
 
     .empty-state .empty-icon {
-        font-size: 2.5rem;
-        margin-bottom: 1rem;
-        opacity: 0.4;
+        font-size: 2.8rem;
+        margin-bottom: 1.25rem;
+        opacity: 0.5;
+        filter: drop-shadow(0 0 15px rgba(0,229,255,0.3));
     }
 
     .empty-state h3 {
-        font-size: 1rem;
+        font-size: 1.1rem;
         font-weight: 700;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.6rem;
     }
 
     .empty-state p {
         font-family: var(--font-mono);
-        font-size: 0.75rem;
+        font-size: 0.78rem;
         color: var(--text-muted);
         line-height: 1.7;
     }
 
     .section-label {
         font-family: var(--font-mono);
-        font-size: 0.65rem;
-        letter-spacing: 0.2em;
+        font-size: 0.68rem;
+        letter-spacing: 0.22em;
         text-transform: uppercase;
         color: var(--text-muted);
-        margin-bottom: 1rem;
+        margin-bottom: 1.25rem;
         display: flex;
         align-items: center;
-        gap: 0.75rem;
+        gap: 0.85rem;
     }
 
     .section-label::after {
@@ -371,20 +451,20 @@
     }
 
     @media (max-width: 900px) {
-        .dashboard { padding: 5rem 1.5rem 3rem; }
+        .dashboard { padding: 4rem 1.5rem 3rem; }
         .dash-header {
             flex-direction: column;
             align-items: flex-start;
             gap: 1.5rem;
         }
-        .dash-actions { align-items: flex-start; }
+        .dash-actions { width: 100%; }
         .device-banner,
         .dash-stats,
         .account-fields {
             grid-template-columns: 1fr;
         }
         .device-banner-media {
-            max-width: 260px;
+            max-width: 240px;
         }
     }
 </style>
@@ -394,11 +474,11 @@
 <div class="dashboard">
     <div class="dash-header">
         <div>
-            <div class="dash-greeting">// Bienvenido/a de vuelta</div>
-            <h1 class="dash-title">{{ current_user.nombre }} {{ current_user.apellido }}</h1>
+            <div class="dash-greeting">// Telemetría en vivo</div>
+            <h1 class="dash-title">Conductor: {{ current_user.nombre }} {{ current_user.apellido }}</h1>
+            <div class="dash-meta" style="margin-top: 0.3rem;">{{ current_user.email }}</div>
         </div>
         <div class="dash-actions">
-            <div class="dash-meta">{{ current_user.email }}</div>
             <a class="dash-action-btn" href="{{ url_for('main.editar_usuario', user_id=current_user.id) }}">
                 Modificar usuario
             </a>
@@ -416,13 +496,13 @@
     <div class="device-banner">
         <div class="device-banner-copy">
             <div class="device-banner-kicker">
-                // Vision Device {{ 'enlazado' if dispositivos else 'sin vincular' }}
+                // Hardware Vision {{ 'enlazado' if dispositivos else 'sin vincular' }}
             </div>
             <div class="device-banner-title">
                 {% if dispositivos %}
-                    {{ dispositivos|length }} dispositivo{{ 's' if dispositivos|length != 1 else '' }} asociado{{ 's' if dispositivos|length != 1 else '' }} a tu cuenta
+                    {{ dispositivos|length }} dispositivo{{ 's' if dispositivos|length != 1 else '' }} activo{{ 's' if dispositivos|length != 1 else '' }} en tu cuenta
                 {% else %}
-                    Vincula tu ESP32 para proteger los datos del conductor
+                    Vincular tu ESP32 para activar alertas físicas en tiempo real
                 {% endif %}
             </div>
             <p>
@@ -448,8 +528,8 @@
     </div>
     {% else %}
     <div class="sync-ok-banner">
-        <span style="color: var(--success);">✓</span>
-        <span>Todos los registros sincronizados con el servidor.</span>
+        <span style="color: var(--success); font-weight: bold;">✓</span>
+        <span>Todos los registros sincronizados correctamente con el servidor.</span>
     </div>
     {% endif %}
 
@@ -460,9 +540,9 @@
             <div class="dash-stat-val">{{ stats.total_eventos if stats else 0 }}</div>
             <div class="dash-stat-sub">
                 {% if stats and stats.total_eventos > 0 %}
-                    Eventos registrados
+                    Eventos registrados en base de datos
                 {% else %}
-                    Sin eventos aún
+                    Sin eventos registrados aún
                 {% endif %}
             </div>
         </div>
@@ -471,24 +551,27 @@
             {% set score = stats.score_conduccion if stats else 100.0 %}
             {% set score_color = 'var(--success)' if score >= 80 else ('var(--warning)' if score >= 50 else 'var(--danger)') %}
             <div class="dash-stat-val" style="color: {{ score_color }};">
-                {{ "%.0f"|format(score) }}<span style="font-size:1rem; color: var(--text-muted);">/100</span>
+                {{ "%.0f"|format(score) }}<span style="font-size:1.1rem; color: var(--text-muted);">/100</span>
             </div>
             <div class="score-bar-wrap">
                 <div class="score-bar-fill"
-                     style="width: {{ score }}%; background: {{ score_color }};"></div>
+                     style="width: {{ score }}%; background: {{ score_color }}; color: {{ score_color }};"></div>
             </div>
         </div>
         <div class="dash-stat">
             <span class="dash-stat-label">Estado del sistema</span>
-            <div class="dash-stat-val" style="color: var(--success); font-size:1rem; margin-top:0.4rem;">ACTIVO</div>
-            <div class="dash-stat-sub">Plataforma en línea</div>
+            <div class="dash-stat-val" style="color: var(--success); font-size:1.15rem; margin-top:0.4rem; display: flex; align-items: center; gap: 0.5rem;">
+                <span style="width: 10px; height: 10px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px var(--success); display: inline-block;"></span>
+                SISTEMA OPERATIVO
+            </div>
+            <div class="dash-stat-sub">Servidor y base de datos conectados</div>
         </div>
     </div>
 
     <!-- Account info -->
-    <div class="section-label">Información de cuenta</div>
+    <div class="section-label">Perfil y Credenciales de Seguridad</div>
     <div class="account-card">
-        <h3>// Perfil del conductor</h3>
+        <h3>// Perfil del Conductor</h3>
         <div class="account-fields">
             <div class="account-field">
                 <label>Nombre</label>
@@ -504,17 +587,17 @@
             </div>
             <div class="account-field">
                 <label>ID de usuario</label>
-                <div class="val" style="font-family: var(--font-mono); font-size:0.8rem;">#{{ current_user.id }}</div>
+                <div class="val" style="font-family: var(--font-mono); font-size:0.85rem; color: var(--accent);">#{{ current_user.id }}</div>
             </div>
             <div class="account-field">
                 <label>Contraseña</label>
-                <div class="val" style="font-family: var(--font-mono); font-size:0.8rem;">
-                    ••••••••  <span style="color:var(--success); font-size:0.7rem;">BCRYPT ✓</span>
+                <div class="val" style="font-family: var(--font-mono); font-size:0.85rem;">
+                    ••••••••  <span style="color:var(--success); font-size:0.7rem; font-weight: bold;">BCRYPT ✓</span>
                 </div>
             </div>
             <div class="account-field">
-                <label>Registro</label>
-                <div class="val" style="font-family: var(--font-mono); font-size:0.75rem;">
+                <label>Fecha de registro</label>
+                <div class="val" style="font-family: var(--font-mono); font-size:0.85rem;">
                     {{ current_user.fecha_registro.strftime('%d/%m/%Y') }}
                 </div>
             </div>
@@ -522,57 +605,58 @@
     </div>
 
     <!-- Detections history -->
-    <div class="section-label" style="margin-top: 2.5rem;">Historial de detecciones</div>
+    <div class="section-label" style="margin-top: 2.5rem;">Caja Negra Digital — Historial de Detecciones</div>
 
     {% if detecciones %}
-    <table class="detections-table">
-        <thead>
-            <tr>
-                <th>Fecha y hora</th>
-                <th>Tipo de evento</th>
-                <th>EAR</th>
-                <th>Pitch</th>
-                <th>Duración alerta</th>
-                <th>Video</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for det in detecciones %}
-            <tr>
-                <td>{{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}</td>
-                <td>
-                    {% if det.tipo_evento == 'Ojos Cerrados' %}
-                        <span class="badge badge-ojos">Ojos Cerrados</span>
-                    {% elif det.tipo_evento == 'Cabeceo' %}
-                        <span class="badge badge-cabeceo">Cabeceo</span>
-                    {% else %}
-                        <span class="badge badge-ambos">Ambos</span>
-                    {% endif %}
-                </td>
-                <td>{{ "%.2f"|format(det.valor_ear) if det.valor_ear is not none else '—' }}</td>
-                <td>{{ "%.1f"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}°</td>
-                <td>{{ "%.1f"|format(det.duracion_alerta) if det.duracion_alerta is not none else '—' }}s</td>
-                <td>
-                    {% if det.video_path and det.video_path != 'sin_video' %}
-                    <a href="{{ url_for('main.serve_video', det_id=det.id) }}"
-                       style="color: var(--accent); font-size: 0.7rem; text-decoration: none;">
-                        ▶ Ver clip
-                    </a>
-                    {% else %}
-                    <span style="color: var(--text-muted); font-size: 0.7rem;">Sin clip</span>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-container">
+        <table class="detections-table">
+            <thead>
+                <tr>
+                    <th>Fecha y hora</th>
+                    <th>Tipo de evento</th>
+                    <th>EAR (Ojos)</th>
+                    <th>Pitch (Cabeceo)</th>
+                    <th>Duración alerta</th>
+                    <th>Evidencia</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for det in detecciones %}
+                <tr>
+                    <td>{{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}</td>
+                    <td>
+                        {% if det.tipo_evento == 'Ojos Cerrados' %}
+                            <span class="badge badge-ojos">Ojos Cerrados</span>
+                        {% elif det.tipo_evento == 'Cabeceo' %}
+                            <span class="badge badge-cabeceo">Cabeceo</span>
+                        {% else %}
+                            <span class="badge badge-ambos">Ambos</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ "%.2f"|format(det.valor_ear) if det.valor_ear is not none else '—' }}</td>
+                    <td>{{ "%.1f"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}°</td>
+                    <td>{{ "%.1f"|format(det.duracion_alerta) if det.duracion_alerta is not none else '—' }}s</td>
+                    <td>
+                        {% if det.video_path and det.video_path != 'sin_video' %}
+                        <a href="{{ url_for('main.serve_video', det_id=det.id) }}" class="video-link">
+                            <span>▶</span> Ver clip
+                        </a>
+                        {% else %}
+                        <span style="color: var(--text-muted); font-size: 0.72rem;">Sin clip</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% else %}
     <div class="empty-state">
         <div class="empty-icon">📹</div>
         <h3>Sin eventos registrados</h3>
         <p>
-            Cuando el sistema detecte un evento de somnolencia,<br>
-            el clip de video aparecerá aquí de forma privada y encriptada.
+            Cuando el sistema detecte un evento de somnolencia o cabeceo,<br>
+            el clip de video de 10s aparecerá aquí de forma privada y encriptada.
         </p>
     </div>
     {% endif %}

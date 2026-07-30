@@ -5,8 +5,9 @@
 {% block extra_styles %}
 <style>
     .user-edit {
-        max-width: 960px;
-        padding: 5rem;
+        max-width: 980px;
+        padding: 4rem 5rem 5rem;
+        margin: 0 auto;
     }
 
     .edit-header {
@@ -15,26 +16,40 @@
         align-items: flex-end;
         gap: 2rem;
         margin-bottom: 2.5rem;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 1.5rem;
     }
 
     .edit-kicker {
         font-family: var(--font-mono);
-        font-size: 0.65rem;
+        font-size: 0.7rem;
         letter-spacing: 0.2em;
         text-transform: uppercase;
         color: var(--accent);
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.4rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 700;
+    }
+    .edit-kicker::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+        border-radius: 50%;
     }
 
     .edit-header h1 {
-        font-size: 2rem;
+        font-size: 2.2rem;
         font-weight: 800;
         letter-spacing: -0.02em;
     }
 
     .edit-meta {
         font-family: var(--font-mono);
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         color: var(--text-muted);
         text-align: right;
     }
@@ -42,17 +57,19 @@
     .edit-panel {
         background: var(--surface);
         border: 1px solid var(--border);
-        padding: 2.5rem;
+        padding: 3rem;
+        border-radius: var(--radius);
+        box-shadow: 0 15px 40px rgba(0,0,0,0.3);
     }
 
     .form-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 1.25rem;
+        gap: 1.35rem;
     }
 
     .form-group {
-        margin-bottom: 1.25rem;
+        margin-bottom: 1.35rem;
     }
 
     .form-group.full {
@@ -64,7 +81,7 @@
         display: block;
         font-family: var(--font-mono);
         font-size: 0.65rem;
-        letter-spacing: 0.15em;
+        letter-spacing: 0.16em;
         text-transform: uppercase;
         color: var(--text-muted);
         margin-bottom: 0.5rem;
@@ -79,26 +96,27 @@
         border-radius: var(--radius);
         color: var(--text);
         font-family: var(--font-mono);
-        font-size: 0.85rem;
+        font-size: 0.88rem;
         outline: none;
-        padding: 0.8rem 1rem;
-        transition: border-color 0.2s, box-shadow 0.2s;
+        padding: 0.85rem 1.1rem;
+        transition: border-color 0.25s, box-shadow 0.25s;
     }
 
     input:focus {
         border-color: var(--accent);
-        box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.12);
+        box-shadow: 0 0 15px rgba(0,229,255,0.2);
     }
 
     input.error {
         border-color: var(--danger);
+        box-shadow: 0 0 15px rgba(255,59,107,0.2);
     }
 
     .help-text,
     .error-text {
         display: block;
         font-family: var(--font-mono);
-        font-size: 0.65rem;
+        font-size: 0.68rem;
         margin-top: 0.45rem;
     }
 
@@ -120,19 +138,22 @@
     .roles-list {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 1px;
+        gap: 1.5px;
         background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
     }
 
     .role-option {
         display: flex;
-        gap: 0.9rem;
+        gap: 1rem;
         align-items: flex-start;
         background: var(--surface2);
         cursor: pointer;
-        padding: 1rem;
+        padding: 1.2rem;
         margin: 0;
-        transition: background 0.2s;
+        transition: background 0.25s;
     }
 
     .role-option:hover {
@@ -140,17 +161,18 @@
     }
 
     .role-option input {
-        width: 18px;
-        height: 18px;
+        width: 19px;
+        height: 19px;
         margin-top: 0.15rem;
         accent-color: var(--accent);
+        cursor: pointer;
     }
 
     .role-option strong {
         display: block;
         color: var(--text);
         font-family: var(--font-mono);
-        font-size: 0.8rem;
+        font-size: 0.82rem;
         letter-spacing: 0.05em;
         text-transform: uppercase;
     }
@@ -159,39 +181,43 @@
         display: block;
         color: var(--text-muted);
         font-family: var(--font-mono);
-        font-size: 0.65rem;
-        margin-top: 0.2rem;
+        font-size: 0.68rem;
+        margin-top: 0.25rem;
     }
 
     .form-actions {
         display: flex;
         justify-content: flex-end;
-        gap: 0.75rem;
-        margin-top: 2rem;
+        gap: 1rem;
+        margin-top: 2.25rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--border);
     }
 
     .btn {
         border-radius: var(--radius);
         cursor: pointer;
         font-family: var(--font-mono);
-        font-size: 0.75rem;
+        font-size: 0.78rem;
         font-weight: 700;
         letter-spacing: 0.15em;
-        min-height: 44px;
-        padding: 0 1.2rem;
+        min-height: 46px;
+        padding: 0 1.5rem;
         text-transform: uppercase;
-        transition: all 0.2s;
+        transition: all 0.25s ease;
     }
 
     .btn-primary {
         background: var(--accent);
         border: 1px solid var(--accent);
         color: var(--bg);
+        box-shadow: 0 0 15px rgba(0,229,255,0.25);
     }
 
     .btn-primary:hover {
         background: transparent;
         color: var(--accent);
+        box-shadow: 0 0 25px rgba(0,229,255,0.45);
     }
 
     .btn-secondary {
@@ -206,17 +232,19 @@
     .btn-secondary:hover {
         border-color: var(--accent);
         color: var(--accent);
+        background: rgba(0,229,255,0.04);
     }
 
     .save-status {
         display: none;
-        border-left: 3px solid var(--success);
+        border-left: 4px solid var(--success);
         color: var(--success);
-        background: var(--surface2);
+        background: rgba(0,255,136,0.08);
         font-family: var(--font-mono);
-        font-size: 0.75rem;
-        margin-top: 1.25rem;
-        padding: 0.85rem 1rem;
+        font-size: 0.78rem;
+        margin-top: 1.5rem;
+        padding: 0.95rem 1.2rem;
+        border-radius: var(--radius);
     }
 
     .save-status.visible {
@@ -224,28 +252,11 @@
     }
 
     @media (max-width: 760px) {
-        .user-edit {
-            padding: 2rem 1rem;
-        }
-
-        .edit-header,
-        .form-actions {
-            align-items: stretch;
-            flex-direction: column;
-        }
-
-        .edit-meta {
-            text-align: left;
-        }
-
-        .form-grid,
-        .roles-list {
-            grid-template-columns: 1fr;
-        }
-
-        .edit-panel {
-            padding: 1.5rem;
-        }
+        .user-edit { padding: 4rem 1.5rem 3rem; }
+        .edit-header, .form-actions { flex-direction: column; align-items: stretch; }
+        .edit-meta { text-align: left; }
+        .form-grid, .roles-list { grid-template-columns: 1fr; }
+        .edit-panel { padding: 1.75rem; }
     }
 </style>
 {% endblock %}
@@ -257,7 +268,7 @@
             <div class="edit-kicker">// Gestión de usuarios</div>
             <h1>Modificar usuario</h1>
         </div>
-        <div class="edit-meta">ID #{{ usuario.id }} · modo edición</div>
+        <div class="edit-meta">ID #{{ usuario.id }} · modo edición activa</div>
     </div>
 
     <section class="edit-panel">
@@ -278,7 +289,7 @@
                 </div>
 
                 {% if is_admin %}
-                <div class="form-group">
+                <div class="form-group full">
                     <label for="email">E-mail</label>
                     <input
                         type="email"
@@ -293,11 +304,9 @@
                 </div>
                 {% endif %}
 
-
-
             {% if is_admin %}
             <fieldset class="form-group full">
-                <legend>Roles</legend>
+                <legend>Roles del usuario</legend>
                 <div class="roles-list">
                     {% for rol in roles_disponibles %}
                     <label class="role-option" for="role_{{ rol.id }}">
@@ -312,9 +321,9 @@
                             <strong>{{ rol.nombre }}</strong>
                             <span>
                                 {% if rol.nombre == 'Administrador' %}
-                                    Acceso completo al sistema.
+                                    Acceso completo al sistema y gestión global.
                                 {% else %}
-                                    Acceso general de usuario común.
+                                    Acceso general de conductor.
                                 {% endif %}
                             </span>
                         </span>
@@ -325,12 +334,14 @@
             </fieldset>
             {% endif %}
 
-            <div class="form-actions">
-                <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancelar</a>
-                <button class="btn btn-primary" type="submit">Guardar</button>
             </div>
 
-            <div class="save-status" id="saveStatus">Validación correcta. Guardando cambios...</div>
+            <div class="form-actions">
+                <a class="btn btn-secondary" href="{{ url_for('main.dashboard') }}">Cancelar</a>
+                <button class="btn btn-primary" type="submit">Guardar cambios</button>
+            </div>
+
+            <div class="save-status" id="saveStatus">✓ Validación correcta. Guardando cambios en base de datos...</div>
         </form>
     </section>
 </div>
@@ -369,7 +380,7 @@
         const hasNameAndSurname = fullNameValue.split(/\s+/).filter(Boolean).length >= 2;
 
         setError(fullName, messages.nombre, '');
-        setError(email, messages.email, '');
+        if (email) setError(email, messages.email, '');
         if (messages.roles) messages.roles.textContent = '';
 
         if (!fullNameValue) {
@@ -384,7 +395,6 @@
             setError(email, messages.email, 'Ingresá un e-mail válido.');
             valid = false;
         }
-
 
         if (roles.length > 0 && selectedRolesCount() === 0) {
             if (messages.roles) messages.roles.textContent = 'Seleccioná al menos un rol.';
