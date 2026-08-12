@@ -301,7 +301,759 @@ erDiagram
 
 ---
 
-## 4. MENTORÍA Y POSIBLES PREGUNTAS DEL TRIBUNAL
+## 4. CÓMO TRAER DATOS DESDE LA BASE DE DATOS Y MOSTRARLOS EN LAS VISTAS
+
+Esta parte es clave para el examen porque el tribunal puede pedir: "Si ya mostrás el nombre del usuario, ¿cómo mostrarías también el email?", o "¿Cómo traerías un dato que no está en la tabla `usuarios`?". En Flask con SQLAlchemy el flujo siempre es:
+
+1.  **Modelo:** La tabla está representada como una clase en [app/models.py](file:///c:/Users/juanc/vision/vision/app/models.py).
+2.  **Controlador:** La ruta consulta la base de datos en [app/controllers.py](file:///c:/Users/juanc/vision/vision/app/controllers.py).
+3.  **Template:** La vista HTML muestra el dato con Jinja usando `{{ ... }}` en [app/templates](file:///c:/Users/juanc/vision/vision/app/templates).
+
+### Forma 1: Usar `current_user` cuando el dato pertenece al usuario logueado
+
+`current_user` viene de **Flask-Login**. Cuando el usuario inicia sesión, Flask guarda su ID en la cookie de sesión. En cada request, la función `user_loader` de [app/__init__.py](file:///c:/Users/juanc/vision/vision/app/__init__.py#L76-L81) usa ese ID para buscar el objeto `Usuario` en la base de datos.
+
+Como `current_user` ya es un objeto de la clase `Usuario`, en el template se puede acceder directamente a sus columnas:
+
+```html
+<h1>Conductor: {{ current_user.nombre }} {{ current_user.apellido }}</h1>
+<p>Email: {{ current_user.email }}</p>
+<p>ID interno: #{{ current_user.id }}</p>
+<p>Fecha de registro: {{ current_user.fecha_registro.strftime('%d/%m/%Y') }}</p>
+```
+
+Esto ya se ve en [dashboard.html](file:///c:/Users/juanc/vision/vision/app/templates/dashboard.html), donde se muestra:
+
+```html
+{{ current_user.nombre }}
+{{ current_user.apellido }}
+{{ current_user.email }}
+{{ current_user.id }}
+```
+
+**Ejemplo de examen:** "La vista ya muestra el nombre del usuario y quiero agregar el email".
+
+Si ya existe esto:
+
+```html
+<h1>{{ current_user.nombre }}</h1>
+```
+
+Se agrega:
+
+```html
+<p>{{ current_user.email }}</p>
+```
+
+No hace falta modificar el controlador porque `current_user` ya trae todos los campos de la tabla `usuarios`: `id`, `nombre`, `apellido`, `email`, `password_hash` y `fecha_registro`. Lo único que no se debería mostrar nunca es `password_hash`, porque es información sensible.
+
+### Forma 2: Pasar una variable desde el controlador con `render_template`
+
+Cuando el dato no conviene tomarlo directamente con `current_user`, el controlador puede consultar la base de datos y mandarlo a la plantilla.
+
+Ejemplo real del dashboard en [app/controllers.py](file:///c:/Users/juanc/vision/vision/app/controllers.py#L300-L329):
+
+```python
+@bp.route('/dashboard')
+@login_required
+def dashboard():
+    stats = EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()
+
+    return render_template(
+        'dashboard.html',
+        stats=stats,
+    )
+```
+
+Después, en [dashboard.html](file:///c:/Users/juanc/vision/vision/app/templates/dashboard.html), se usa:
+
+```html
+{{ stats.total_eventos }}
+{{ stats.score_conduccion }}
+```
+
+Acá el dato **no está en la tabla `usuarios`**. Está en la tabla `estadisticas_seguridad`, pero se trae usando `usuario_id=current_user.id`, es decir, "dame las estadísticas que pertenecen al usuario que está logueado".
+
+**Explicación oral corta:**
+
+> "Si el dato pertenece al usuario logueado pero está en otra tabla, hago una consulta filtrando por `usuario_id=current_user.id`, guardo el resultado en una variable y se la paso al HTML con `render_template`."
+
+### Forma 3: Traer varios registros con `.all()`
+
+Cuando se necesita una lista completa de registros, se usa `.all()`.
+
+Ejemplo real del dashboard:
+
+```python
+detecciones = (
+    Deteccion.query
+    .filter_by(usuario_id=current_user.id)
+    .order_by(Deteccion.fecha_hora.desc())
+    .limit(20)
+    .all()
+)
+
+return render_template('dashboard.html', detecciones=detecciones)
+```
+
+Esto significa:
+
+1.  Buscar en la tabla `detecciones`.
+2.  Quedarse solo con las detecciones del usuario actual.
+3.  Ordenarlas desde la más nueva a la más vieja.
+4.  Limitar el resultado a las últimas 20.
+5.  Enviar la lista al template.
+
+En el HTML se recorre con un `for`:
+
+```html
+{% for det in detecciones %}
+    <p>{{ det.fecha_hora }}</p>
+    <p>{{ det.tipo_evento }}</p>
+    <p>{{ det.valor_ear }}</p>
+    <p>{{ det.valor_pitch }}</p>
+{% endfor %}
+```
+
+**Ejemplo de examen:** "Quiero mostrar en el dashboard el historial de alertas del conductor".  
+La respuesta es: consultar `Deteccion.query.filter_by(usuario_id=current_user.id).all()` y recorrerlo en el template con `{% for det in detecciones %}`.
+
+### Forma 4: Traer un solo registro con `.first()`
+
+Cuando esperamos un único resultado, se usa `.first()`.
+
+Ejemplo:
+
+```python
+stats = EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()
+```
+
+Esto devuelve una sola fila de la tabla `estadisticas_seguridad`. Si no existe, devuelve `None`. Por eso a veces conviene validar antes de mostrar:
+
+```html
+{% if stats %}
+    <p>Score: {{ stats.score_conduccion }}</p>
+{% else %}
+    <p>Score: 100</p>
+{% endif %}
+```
+
+En nuestro proyecto, antes de mostrar el dashboard se llama a `_init_stats(current_user.id)` para asegurarse de que el usuario tenga una fila de estadísticas creada.
+
+### Forma 5: Traer por ID con `.get_or_404()`
+
+Cuando la URL trae un ID, se puede buscar directamente por clave primaria.
+
+Ejemplo real en la ruta de edición de usuario:
+
+```python
+@bp.route('/usuarios/<int:user_id>/editar', methods=['GET', 'POST'])
+@login_required
+def editar_usuario(user_id):
+    usuario = Usuario.query.get_or_404(user_id)
+```
+
+Si existe un usuario con ese ID, lo carga. Si no existe, Flask responde con error 404.
+
+También se usa en los videos:
+
+```python
+det = Deteccion.query.get_or_404(det_id)
+```
+
+Después se valida seguridad:
+
+```python
+if det.usuario_id != current_user.id:
+    abort(403)
+```
+
+Esto evita que un usuario vea el video de detección de otro usuario cambiando el número en la URL.
+
+### Forma 6: Traer datos relacionados usando relaciones del modelo
+
+En [app/models.py](file:///c:/Users/juanc/vision/vision/app/models.py), la clase `Usuario` tiene relaciones:
+
+```python
+detecciones = db.relationship('Deteccion', backref='usuario', lazy=True)
+estadisticas = db.relationship('EstadisticaSeguridad', backref='usuario', uselist=False)
+dispositivos = db.relationship('Dispositivo', backref='usuario', lazy=True)
+roles = db.relationship('Rol', secondary=usuario_roles, backref=db.backref('usuarios', lazy='dynamic'))
+```
+
+Esto permite navegar entre tablas como si fueran objetos de Python.
+
+Ejemplos:
+
+```python
+usuario = Usuario.query.get(1)
+print(usuario.email)
+print(usuario.detecciones)
+print(usuario.estadisticas.score_conduccion)
+print(usuario.dispositivos)
+print(usuario.roles)
+```
+
+Y desde una detección se puede volver al usuario gracias al `backref='usuario'`:
+
+```python
+det = Deteccion.query.first()
+print(det.usuario.nombre)
+print(det.usuario.email)
+```
+
+**Ejemplo de examen:** "En el panel de administrador tengo una detección y quiero mostrar el nombre del usuario dueño de esa detección".
+
+En el template:
+
+```html
+{{ det.usuario.nombre }} {{ det.usuario.apellido }}
+{{ det.usuario.email }}
+```
+
+El dato `tipo_evento` sale de `detecciones`, pero `det.usuario.email` sale de `usuarios`. SQLAlchemy sabe unirlos porque `Deteccion.usuario_id` es clave foránea de `usuarios.id`.
+
+### Forma 7: Traer datos de otra tabla filtrando por `usuario_id`
+
+Esta es la forma más común cuando la tabla tiene una clave foránea al usuario.
+
+Ejemplo para traer dispositivos vinculados:
+
+```python
+dispositivos_vinculados = (
+    Dispositivo.query
+    .filter_by(usuario_id=current_user.id)
+    .order_by(Dispositivo.linked_at.desc())
+    .all()
+)
+
+return render_template(
+    'dashboard.html',
+    dispositivos=dispositivos_vinculados,
+)
+```
+
+En el template:
+
+```html
+{% for dispositivo in dispositivos %}
+    <p>{{ dispositivo.device_id }}</p>
+    <p>{{ dispositivo.ip_address }}</p>
+    <p>{{ dispositivo.firmware_version }}</p>
+    <p>{{ dispositivo.last_seen }}</p>
+{% endfor %}
+```
+
+**Ejemplo de examen:** "Quiero mostrar en el dashboard la IP del ESP32 del usuario".  
+Ese dato no está en `usuarios`, está en `dispositivos`. Se consulta:
+
+```python
+Dispositivo.query.filter_by(usuario_id=current_user.id).all()
+```
+
+Y luego en HTML:
+
+```html
+{{ dispositivo.ip_address }}
+```
+
+### Forma 8: Traer datos con filtros más específicos
+
+`filter_by` sirve para comparaciones simples por igualdad:
+
+```python
+Usuario.query.filter_by(email=email).first()
+Dispositivo.query.filter_by(device_id=device_id).first()
+Dispositivo.query.filter_by(usuario_id=current_user.id).all()
+```
+
+`filter` sirve para condiciones más complejas:
+
+```python
+Rol.query.filter(Rol.nombre.in_(roles_seleccionados)).all()
+```
+
+Ese ejemplo se usa cuando el administrador selecciona varios roles en el formulario. Como puede seleccionar más de uno, se usa `in_`, que significa "traeme los roles cuyo nombre esté dentro de esta lista".
+
+Otro ejemplo posible:
+
+```python
+online_limit = datetime.utcnow() - timedelta(minutes=10)
+dispositivos_online = (
+    Dispositivo.query
+    .filter(Dispositivo.usuario_id == current_user.id)
+    .filter(Dispositivo.last_seen >= online_limit)
+    .all()
+)
+```
+
+Esto traería solamente los dispositivos del usuario actual que se conectaron en los últimos 10 minutos.
+
+### Forma 9: Traer totales, promedios y datos calculados
+
+No siempre se trae una fila completa; a veces se necesita calcular un total o promedio.
+
+Ejemplo real del panel administrador:
+
+```python
+detecciones_por_usuario = dict(
+    db.session.query(Deteccion.usuario_id, db.func.count(Deteccion.id))
+    .group_by(Deteccion.usuario_id)
+    .all()
+)
+```
+
+Esto devuelve cuántas detecciones tiene cada usuario. Luego se arma un resumen:
+
+```python
+usuarios_resumen.append({
+    'usuario': usuario,
+    'roles': ', '.join(rol.nombre for rol in usuario.roles) or 'Sin rol',
+    'detecciones': detecciones_por_usuario.get(usuario.id, 0),
+    'score': stats_usuario.score_conduccion if stats_usuario else 100.0,
+})
+```
+
+También se calcula el promedio de score:
+
+```python
+score_promedio = (
+    db.session.query(db.func.avg(EstadisticaSeguridad.score_conduccion)).scalar()
+    or 100.0
+)
+```
+
+En el template:
+
+```html
+{{ total_usuarios }}
+{{ total_detecciones }}
+{{ score_promedio }}
+```
+
+**Explicación oral corta:**
+
+> "Para datos calculados uso `db.session.query` con funciones de SQLAlchemy como `count`, `avg` y `group_by`. Eso me permite obtener totales y promedios sin traer toda la tabla manualmente."
+
+### Forma 10: Traer datos uniendo tablas con `join`
+
+Aunque en el proyecto muchas veces se usan relaciones (`det.usuario.email`) o diccionarios de resumen, también se puede hacer un `join` explícito.
+
+Ejemplo: traer detecciones junto con el usuario dueño:
+
+```python
+resultados = (
+    db.session.query(Deteccion, Usuario)
+    .join(Usuario, Deteccion.usuario_id == Usuario.id)
+    .order_by(Deteccion.fecha_hora.desc())
+    .limit(20)
+    .all()
+)
+```
+
+En ese caso, cada resultado trae dos objetos: una detección y un usuario.
+
+```html
+{% for det, usuario in resultados %}
+    <p>{{ usuario.nombre }} {{ usuario.apellido }}</p>
+    <p>{{ usuario.email }}</p>
+    <p>{{ det.tipo_evento }}</p>
+    <p>{{ det.fecha_hora }}</p>
+{% endfor %}
+```
+
+Un `join` sirve cuando necesitás armar una consulta más compleja mezclando columnas de varias tablas. Para casos simples, es más fácil usar las relaciones del modelo.
+
+### Forma 11: Traer datos para una API y devolver JSON
+
+No todos los datos terminan en una plantilla HTML. Algunas rutas devuelven JSON para que las consuma JavaScript, el ESP32 o el script de detección.
+
+Ejemplo real:
+
+```python
+@bp.route('/api/devices/<device_id>/status')
+@login_required
+def api_device_status(device_id):
+    dispositivo = Dispositivo.query.filter_by(
+        device_id=_clean_device_id(device_id),
+        usuario_id=current_user.id,
+    ).first_or_404()
+
+    return jsonify({
+        'device_id': dispositivo.device_id,
+        'mac': dispositivo.mac,
+        'ip_address': dispositivo.ip_address,
+        'firmware_version': dispositivo.firmware_version,
+        'last_seen': dispositivo.last_seen.isoformat() if dispositivo.last_seen else None,
+    })
+```
+
+Acá se consulta la tabla `dispositivos`, se valida que el dispositivo pertenezca al usuario logueado y se responde con datos en formato JSON.
+
+### Forma 12: Insertar o actualizar datos antes de mostrarlos
+
+Traer datos no es lo único que se hace con la base de datos. También se insertan y actualizan filas.
+
+Para crear un usuario:
+
+```python
+u = Usuario(nombre=nombre, apellido=apellido, email=email)
+u.set_password(pw)
+db.session.add(u)
+db.session.commit()
+```
+
+Para actualizar un usuario:
+
+```python
+usuario.nombre = nombre
+usuario.apellido = apellido
+usuario.email = email
+db.session.commit()
+```
+
+Para vincular un dispositivo al usuario actual:
+
+```python
+dispositivo.usuario_id = current_user.id
+dispositivo.linked_at = datetime.utcnow()
+db.session.commit()
+```
+
+La idea importante es:
+
+*   `db.session.add(...)` prepara una fila nueva.
+*   Cambiar atributos como `usuario.email = email` modifica una fila existente.
+*   `db.session.commit()` confirma los cambios en MySQL.
+*   `db.session.rollback()` revierte cambios si ocurre un error.
+
+### Ejemplos concretos: qué escribir para traer cada dato
+
+Esta es una "chuleta" práctica para el examen. La idea es responder rápido: qué modelo se consulta, qué variable se manda al template y cómo se imprime en HTML.
+
+#### Tabla `usuarios`
+
+**Nombre, apellido, email, ID y fecha del usuario logueado:**
+
+```html
+{{ current_user.nombre }}
+{{ current_user.apellido }}
+{{ current_user.email }}
+#{{ current_user.id }}
+{{ current_user.fecha_registro.strftime('%d/%m/%Y') }}
+```
+
+**Un usuario específico por ID:**
+
+```python
+usuario = Usuario.query.get_or_404(user_id)
+return render_template('editar_usuario.html', usuario=usuario)
+```
+
+```html
+{{ usuario.nombre }}
+{{ usuario.apellido }}
+{{ usuario.email }}
+```
+
+**Un usuario por email, como en login:**
+
+```python
+user = Usuario.query.filter_by(email=email).first()
+```
+
+#### Tabla `estadisticas_seguridad`
+
+**Score, total de eventos y última actualización del usuario logueado:**
+
+```python
+stats = EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()
+return render_template('dashboard.html', stats=stats)
+```
+
+```html
+{{ stats.total_eventos if stats else 0 }}
+{{ "%.0f"|format(stats.score_conduccion if stats else 100.0) }}/100
+{{ stats.ultima_actualizacion if stats else 'Sin actualizar' }}
+```
+
+**El mismo score usando la relación del modelo:**
+
+```html
+{{ current_user.estadisticas.score_conduccion }}
+```
+
+#### Tabla `detecciones`
+
+**Últimas 20 detecciones del conductor actual:**
+
+```python
+detecciones = (
+    Deteccion.query
+    .filter_by(usuario_id=current_user.id)
+    .order_by(Deteccion.fecha_hora.desc())
+    .limit(20)
+    .all()
+)
+return render_template('dashboard.html', detecciones=detecciones)
+```
+
+```html
+{% for det in detecciones %}
+    {{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}
+    {{ det.tipo_evento }}
+    {{ det.valor_ear }}
+    {{ det.valor_pitch }}
+    {{ det.duracion_alerta }}
+    {{ det.video_path }}
+{% endfor %}
+```
+
+**Una detección por ID, validando que sea del usuario actual:**
+
+```python
+det = Deteccion.query.get_or_404(det_id)
+if det.usuario_id != current_user.id:
+    abort(403)
+```
+
+**Datos del usuario dueño de una detección:**
+
+```html
+{{ det.usuario.nombre }}
+{{ det.usuario.apellido }}
+{{ det.usuario.email }}
+```
+
+#### Tabla `dispositivos`
+
+**Todos los ESP32 vinculados al usuario actual:**
+
+```python
+dispositivos = (
+    Dispositivo.query
+    .filter_by(usuario_id=current_user.id)
+    .order_by(Dispositivo.linked_at.desc())
+    .all()
+)
+return render_template('dispositivos.html', dispositivos=dispositivos)
+```
+
+```html
+{% for dispositivo in dispositivos %}
+    {{ dispositivo.device_id }}
+    {{ dispositivo.mac }}
+    {{ dispositivo.ip_address }}
+    {{ dispositivo.firmware_version }}
+    {{ dispositivo.last_seen }}
+    {{ dispositivo.linked_at }}
+{% endfor %}
+```
+
+**Un dispositivo por `device_id`:**
+
+```python
+dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+```
+
+**Un dispositivo por `device_id`, asegurando que sea del usuario logueado:**
+
+```python
+dispositivo = Dispositivo.query.filter_by(
+    device_id=_clean_device_id(device_id),
+    usuario_id=current_user.id,
+).first_or_404()
+```
+
+**Solo dispositivos online en los últimos 10 minutos:**
+
+```python
+online_limit = datetime.utcnow() - timedelta(minutes=10)
+dispositivos_online = (
+    Dispositivo.query
+    .filter(Dispositivo.usuario_id == current_user.id)
+    .filter(Dispositivo.last_seen >= online_limit)
+    .all()
+)
+```
+
+#### Tabla `roles`
+
+**Roles del usuario actual:**
+
+```html
+{% for rol in current_user.roles %}
+    {{ rol.nombre }}
+{% endfor %}
+```
+
+**Verificar si es administrador:**
+
+```python
+current_user.has_role('Administrador')
+```
+
+```html
+{% if current_user.has_role('Administrador') %}
+    <a href="{{ url_for('main.admin_base_datos') }}">Panel admin</a>
+{% endif %}
+```
+
+**Todos los roles disponibles para un formulario:**
+
+```python
+roles_disponibles = Rol.query.order_by(Rol.nombre.asc()).all()
+```
+
+**Roles elegidos en un formulario:**
+
+```python
+roles_seleccionados = request.form.getlist('roles')
+selected_roles = Rol.query.filter(Rol.nombre.in_(roles_seleccionados)).all()
+```
+
+#### Tablas `dispositivo_eventos` y `dispositivo_comandos`
+
+**Eventos de un dispositivo:**
+
+```python
+eventos = (
+    DispositivoEvento.query
+    .filter_by(dispositivo_id=dispositivo.id)
+    .order_by(DispositivoEvento.created_at.desc())
+    .all()
+)
+```
+
+```html
+{% for evento in eventos %}
+    {{ evento.event_type }}
+    {{ evento.value }}
+    {{ evento.created_at }}
+{% endfor %}
+```
+
+**Comandos pendientes para un ESP32:**
+
+```python
+comandos = (
+    DispositivoComando.query
+    .filter_by(dispositivo_id=dispositivo.id, consumed=False)
+    .order_by(DispositivoComando.created_at.asc())
+    .limit(5)
+    .all()
+)
+payload = [cmd.command for cmd in comandos]
+```
+
+#### Ejemplos mezclando tablas
+
+**Últimas detecciones del sistema con nombre y email del usuario:**
+
+```python
+ultimas_detecciones = (
+    Deteccion.query
+    .order_by(Deteccion.fecha_hora.desc())
+    .limit(12)
+    .all()
+)
+return render_template('admin_base_datos.html', ultimas_detecciones=ultimas_detecciones)
+```
+
+```html
+{% for det in ultimas_detecciones %}
+    {{ det.id }}
+    {{ det.usuario.nombre }} {{ det.usuario.apellido }}
+    {{ det.usuario.email }}
+    {{ det.tipo_evento }}
+    {{ det.fecha_hora }}
+{% endfor %}
+```
+
+**Usuarios con roles, cantidad de detecciones y score:**
+
+```python
+usuarios = Usuario.query.order_by(Usuario.fecha_registro.desc()).all()
+detecciones_por_usuario = dict(
+    db.session.query(Deteccion.usuario_id, db.func.count(Deteccion.id))
+    .group_by(Deteccion.usuario_id)
+    .all()
+)
+estadisticas_por_usuario = {
+    stat.usuario_id: stat for stat in EstadisticaSeguridad.query.all()
+}
+
+usuarios_resumen = []
+for usuario in usuarios:
+    stats_usuario = estadisticas_por_usuario.get(usuario.id)
+    usuarios_resumen.append({
+        'usuario': usuario,
+        'roles': ', '.join(rol.nombre for rol in usuario.roles) or 'Sin rol',
+        'detecciones': detecciones_por_usuario.get(usuario.id, 0),
+        'score': stats_usuario.score_conduccion if stats_usuario else 100.0,
+    })
+```
+
+```html
+{% for row in usuarios_resumen %}
+    {% set usuario = row.usuario %}
+    {{ usuario.id }}
+    {{ usuario.nombre }} {{ usuario.apellido }}
+    {{ usuario.email }}
+    {{ row.roles }}
+    {{ row.detecciones }}
+    {{ row.score }}
+{% endfor %}
+```
+
+**El mismo caso con `join`, si el profesor pide unión explícita:**
+
+```python
+resultados = (
+    db.session.query(Deteccion, Usuario)
+    .join(Usuario, Deteccion.usuario_id == Usuario.id)
+    .order_by(Deteccion.fecha_hora.desc())
+    .all()
+)
+```
+
+```html
+{% for det, usuario in resultados %}
+    {{ usuario.nombre }}
+    {{ usuario.email }}
+    {{ det.tipo_evento }}
+{% endfor %}
+```
+
+#### Mini respuestas rápidas según lo que te pidan
+
+*   **Traer el email donde ya está el nombre:** `{{ current_user.email }}` si es el usuario logueado, o `{{ usuario.email }}` si el controlador mandó `usuario`.
+*   **Traer el score del conductor:** `EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()` y `{{ stats.score_conduccion }}`.
+*   **Traer detecciones del conductor:** `Deteccion.query.filter_by(usuario_id=current_user.id).all()` y `{% for det in detecciones %}`.
+*   **Traer la IP del ESP32:** `Dispositivo.query.filter_by(usuario_id=current_user.id).all()` y `{{ dispositivo.ip_address }}`.
+*   **Traer el nombre del usuario desde una detección:** `{{ det.usuario.nombre }}`.
+*   **Traer roles:** `current_user.roles` o `usuario.roles`.
+*   **Traer cantidad total de detecciones:** `db.func.count(Deteccion.id)`.
+*   **Traer promedio de score:** `db.func.avg(EstadisticaSeguridad.score_conduccion)`.
+
+### Resumen rápido para responder en el examen
+
+*   **Dato del usuario logueado:** uso `current_user.email`, `current_user.nombre`, `current_user.id`.
+*   **Dato de otra tabla del mismo usuario:** consulto con `filter_by(usuario_id=current_user.id)`.
+*   **Lista de datos:** uso `.all()` y en el HTML hago `{% for item in lista %}`.
+*   **Un solo dato:** uso `.first()` o `.get_or_404(id)`.
+*   **Dato relacionado:** uso relaciones como `det.usuario.email` o `usuario.dispositivos`.
+*   **Totales y promedios:** uso `db.session.query`, `db.func.count`, `db.func.avg` y `group_by`.
+*   **Datos para JavaScript o ESP32:** consulto la base y devuelvo `jsonify(...)`.
+*   **Para mostrarlo en una vista:** paso la variable con `render_template('vista.html', variable=valor)` y en el template la imprimo con `{{ variable.campo }}`.
+
+**Frase ideal para el oral:**
+
+> "En este proyecto los modelos de `app/models.py` representan las tablas. Desde el controlador hago consultas con SQLAlchemy, por ejemplo `Usuario.query`, `Deteccion.query` o `Dispositivo.query`. Si el dato es del usuario actual uso `current_user`; si está en otra tabla, filtro por `usuario_id=current_user.id` o uso las relaciones definidas en el modelo. Finalmente paso los datos al template con `render_template` y los muestro con Jinja usando `{{ }}`."
+
+---
+
+## 5. MENTORÍA Y POSIBLES PREGUNTAS DEL TRIBUNAL
 
 Aquí tienes una lista de 10 preguntas desafiantes que la profesora Yanil Berthalet o el tribunal evaluador podrían hacerte en la defensa, explicadas de forma sencilla y directa para que respondas con total seguridad.
 
