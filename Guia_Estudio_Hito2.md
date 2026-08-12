@@ -303,6 +303,35 @@ erDiagram
 
 ## 4. CÓMO TRAER DATOS DESDE LA BASE DE DATOS Y MOSTRARLOS EN LAS VISTAS
 
+como entiende flask que current_user pertenece a la tabla usuarios del modelo
+
+Flask lo entiende por la configuración de Flask-Login, no por magia directa de Flask.
+En app/__init__.py hay una función parecida a esta:
+@login_manager.user_loader
+def load_user(uid):
+    return Usuario.query.get(int(uid))
+Esa función le dice a Flask-Login:
+“Cuando tengas un ID de usuario guardado en la sesión, buscá ese ID en la tabla usuarios usando el modelo Usuario”.
+Y Flask-Login sabe que Usuario representa la tabla usuarios porque en app/models.py la clase está definida así:
+class Usuario(UserMixin, db.Model):
+    __tablename__ = 'usuarios'
+Entonces el flujo es:
+El usuario inicia sesión.
+En el login se ejecuta:
+login_user(u)
+donde u es un objeto de la clase Usuario.
+Flask-Login guarda en la sesión el id de ese usuario.
+En cada nueva request, Flask-Login lee ese ID.
+Llama automáticamente a load_user(uid).
+Esa función hace:
+Usuario.query.get(int(uid))
+Como Usuario.__tablename__ = 'usuarios', SQLAlchemy consulta la tabla usuarios.
+El resultado queda disponible como current_user.
+Por eso después podés hacer:
+{{ current_user.nombre }}
+{{ current_user.email }}
+porque current_user es, en realidad, una instancia del modelo Usuario.
+
 Esta parte es clave para el examen porque el tribunal puede pedir: "Si ya mostrás el nombre del usuario, ¿cómo mostrarías también el email?", o "¿Cómo traerías un dato que no está en la tabla `usuarios`?". En Flask con SQLAlchemy el flujo siempre es:
 
 1.  **Modelo:** La tabla está representada como una clase en [app/models.py](file:///c:/Users/juanc/vision/vision/app/models.py).
