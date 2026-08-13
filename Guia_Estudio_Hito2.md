@@ -162,6 +162,677 @@ sequenceDiagram
 
 ---
 
+#### 3. Explicación del código `esp32_alerta_wifi.ino`
+
+El archivo [esp32_alerta_wifi.ino](file:///c:/Users/juanc/vision/vision/esp32_alerta_wifi/esp32_alerta_wifi.ino) es el firmware que corre dentro del ESP32. Su función dentro del proyecto VISION es actuar como **módulo físico de alerta**: cuando el sistema de visión artificial detecta somnolencia, además de registrar la detección en la base de datos, envía una petición HTTP al ESP32 para encender un buzzer y un motor vibrador.
+
+En palabras simples: Python detecta el riesgo, Flask registra el evento, y el ESP32 despierta al conductor con sonido y vibración.
+
+##### Librerías incluidas
+
+```cpp
+#include <WiFi.h>
+#include <WebServer.h>
+```
+
+*   `WiFi.h`: permite que el ESP32 se conecte a una red WiFi.
+*   `WebServer.h`: permite levantar un servidor HTTP dentro del ESP32. Gracias a esto, otro programa puede entrar a rutas como `/alerta_on` o `/alerta_off`.
+
+Esto es importante porque el ESP32 no necesita pantalla ni teclado. Recibe órdenes por red.
+
+##### Credenciales de WiFi
+
+```cpp
+const char* SSID = "¿quien lo diria?";
+const char* PASSWORD = "povwhenbut";
+```
+
+Estas constantes guardan el nombre y la contraseña de la red WiFi a la que se conectará el ESP32. Cuando arranca, las usa en:
+
+```cpp
+WiFi.begin(SSID, PASSWORD);
+```
+
+**Respuesta oral corta:**
+
+> "El ESP32 necesita conectarse al mismo entorno de red que el sistema de detección para poder recibir la orden HTTP que activa la alarma."
+
+##### Pines del motor vibrador y buzzer
+
+```cpp
+const int PIN_MOTOR = 23;
+const int PIN_BUZZER = 22;
+```
+
+Acá se define qué pines físicos del ESP32 controlan cada actuador:
+
+*   `PIN_MOTOR = 23`: controla el motor vibrador.
+*   `PIN_BUZZER = 22`: controla el buzzer activo.
+
+Cuando el pin se pone en `HIGH`, el componente se enciende. Cuando se pone en `LOW`, se apaga. En el contexto del proyecto, si se detecta somnolencia ambos pines pasan a `HIGH`; si el conductor se recupera, ambos vuelven a `LOW`.
+
+##### Servidor HTTP en el puerto 80
+
+```cpp
+WebServer server(80);
+```
+
+Esta línea crea un servidor web dentro del ESP32 usando el puerto 80, que es el puerto HTTP tradicional. Gracias a esto, el ESP32 puede responder a direcciones como:
+
+```text
+http://IP_DEL_ESP32/
+http://IP_DEL_ESP32/estado
+http://IP_DEL_ESP32/alerta_on
+http://IP_DEL_ESP32/alerta_off
+```
+
+Por ejemplo, si el monitor serie muestra que la IP es `192.168.1.50`, el sistema puede activar la alarma llamando:
+
+```text
+http://192.168.1.50/alerta_on
+```
+
+##### Variable de estado `alarmaActiva`
+
+```cpp
+bool alarmaActiva = false;
+```
+
+Esta variable guarda si la alarma está activa o apagada:
+
+*   `false`: alarma apagada.
+*   `true`: alarma encendida.
+
+No controla por sí sola el buzzer ni el motor; sirve para recordar el estado actual y poder informarlo en la ruta `/estado`.
+
+##### Función central `aplicarAlarma`
+
+```cpp
+void aplicarAlarma(bool activar) {
+  alarmaActiva = activar;
+
+  digitalWrite(PIN_MOTOR, activar ? HIGH : LOW);
+  digitalWrite(PIN_BUZZER, activar ? HIGH : LOW);
+
+  Serial.println(activar ? "Alarma ACTIVADA" : "Alarma DESACTIVADA");
+}
+```
+
+Esta es la función más importante del firmware. Recibe un valor booleano:
+
+*   `true`: enciende la alarma.
+*   `false`: apaga la alarma.
+
+Primero actualiza la variable:
+
+```cpp
+alarmaActiva = activar;
+```
+
+Luego prende o apaga el motor vibrador:
+
+```cpp
+digitalWrite(PIN_MOTOR, activar ? HIGH : LOW);
+```
+
+Y hace lo mismo con el buzzer:
+
+```cpp
+digitalWrite(PIN_BUZZER, activar ? HIGH : LOW);
+```
+
+La expresión:
+
+```cpp
+activar ? HIGH : LOW
+```
+
+significa: "si `activar` es verdadero, usar `HIGH`; si es falso, usar `LOW`".
+
+Finalmente escribe en el monitor serie:
+
+```cpp
+Serial.println(activar ? "Alarma ACTIVADA" : "Alarma DESACTIVADA");
+```
+
+Esto ayuda a verificar que el ESP32 recibió la orden correctamente.
+
+##### Ruta `/` y `/estado`: consultar el estado
+
+```cpp
+void responderEstado() {
+  String estado = alarmaActiva ? "ON" : "OFF";
+  server.send(200, "text/plain", "ESP32 OK - Alarma: " + estado);
+}
+```
+
+Esta función responde si el ESP32 está funcionando y si la alarma está prendida o apagada. Si `alarmaActiva` es `true`, responde `ESP32 OK - Alarma: ON`; si está apagada, responde `ESP32 OK - Alarma: OFF`.
+
+##### Ruta `/alerta_on`: encender alarma y vibración
+
+```cpp
+void alertaOn() {
+  aplicarAlarma(true);
+  server.send(200, "text/plain", "Alerta ACTIVADA");
+}
+```
+
+Esta función se ejecuta cuando llega una petición HTTP a `/alerta_on`. Hace dos cosas:
+
+1.  Llama a `aplicarAlarma(true)`.
+2.  Responde al cliente con el texto `"Alerta ACTIVADA"`.
+
+En el proyecto, esta ruta se llama cuando la IA detecta que el conductor está en riesgo por ojos cerrados, cabeceo o ambos. En ese momento el ESP32 pone en `HIGH` los pines 23 y 22, encendiendo el motor vibrador y el buzzer.
+
+##### Ruta `/alerta_off`: apagar alarma y vibración
+
+```cpp
+void alertaOff() {
+  aplicarAlarma(false);
+  server.send(200, "text/plain", "Alerta DESACTIVADA");
+}
+```
+
+Esta función se ejecuta cuando llega una petición HTTP a `/alerta_off`. Apaga ambos actuadores llamando a:
+
+```cpp
+aplicarAlarma(false);
+```
+
+En el sistema VISION esto representa la recuperación del conductor: cuando la cámara confirma que los ojos volvieron a abrirse y la postura se estabilizó, se envía la orden de apagado.
+
+##### Ruta no encontrada
+
+```cpp
+void rutaNoEncontrada() {
+  server.send(404, "text/plain", "Ruta no encontrada");
+}
+```
+
+Si alguien entra a una ruta inexistente, el ESP32 responde con error `404`. Por ejemplo, `/prueba` respondería `Ruta no encontrada`.
+
+##### `setup()`: configuración inicial
+
+```cpp
+void setup() {
+  Serial.begin(115200);
+```
+
+`setup()` se ejecuta una sola vez cuando el ESP32 prende o se reinicia. La línea `Serial.begin(115200)` inicia la comunicación con el monitor serie para ver mensajes de depuración.
+
+```cpp
+pinMode(PIN_MOTOR, OUTPUT);
+pinMode(PIN_BUZZER, OUTPUT);
+aplicarAlarma(false);
+```
+
+Estas líneas configuran los pines 23 y 22 como salidas eléctricas. Después llaman a `aplicarAlarma(false)` para garantizar que al arrancar el ESP32 el buzzer y el motor estén apagados.
+
+```cpp
+WiFi.mode(WIFI_STA);
+WiFi.setSleep(false);
+```
+
+`WIFI_STA` significa "modo estación": el ESP32 se conecta a un router existente, no crea su propia red. `WiFi.setSleep(false)` desactiva el ahorro de energía del WiFi. Esto es útil porque el dispositivo debe responder rápido cuando llega una alerta de somnolencia.
+
+```cpp
+WiFi.begin(SSID, PASSWORD);
+```
+
+Inicia la conexión WiFi usando las credenciales configuradas arriba.
+
+```cpp
+while (WiFi.status() != WL_CONNECTED) {
+  delay(500);
+  Serial.print(".");
+}
+```
+
+Este bucle espera hasta que el ESP32 se conecte a WiFi. Cada medio segundo imprime un punto en el monitor serie.
+
+Cuando se conecta:
+
+```cpp
+Serial.println("Conectado");
+Serial.print("IP del ESP32: ");
+Serial.println(WiFi.localIP());
+```
+
+Muestra la IP asignada por el router. Esa IP es importante porque es la dirección a la que Python o Flask deben enviar las órdenes.
+
+##### Registro de rutas del servidor
+
+```cpp
+server.on("/", responderEstado);
+server.on("/estado", responderEstado);
+server.on("/alerta_on", alertaOn);
+server.on("/alerta_off", alertaOff);
+server.onNotFound(rutaNoEncontrada);
+```
+
+Estas líneas conectan cada URL con su función:
+
+*   `/`: muestra estado general.
+*   `/estado`: muestra estado general.
+*   `/alerta_on`: enciende buzzer y vibración.
+*   `/alerta_off`: apaga buzzer y vibración.
+*   cualquier otra ruta: responde 404.
+
+Es como decirle al ESP32: "si te piden esta dirección, ejecutá esta función".
+
+##### Inicio del servidor
+
+```cpp
+server.begin();
+Serial.println("Servidor HTTP iniciado en puerto 80");
+```
+
+`server.begin()` deja el servidor listo para escuchar peticiones HTTP. Desde ese momento, el ESP32 queda esperando órdenes de encendido o apagado.
+
+##### `loop()`: mantener vivo el servidor
+
+```cpp
+void loop() {
+  server.handleClient();
+}
+```
+
+`loop()` se ejecuta infinitamente mientras el ESP32 está prendido. `server.handleClient()` revisa si llegó alguna petición HTTP. Si llega una petición a `/alerta_on`, ejecuta `alertaOn()`. Si llega a `/alerta_off`, ejecuta `alertaOff()`.
+
+Esta línea es fundamental: sin ella, el servidor estaría iniciado, pero no procesaría las órdenes.
+
+##### Flujo completo durante una detección de somnolencia
+
+```mermaid
+sequenceDiagram
+    participant Camara as Camara + IA Python
+    participant Flask as Backend Flask
+    participant MySQL as Base de Datos
+    participant ESP32 as ESP32 Alarma Fisica
+
+    Camara->>Camara: Calcula EAR y Pitch
+    Camara->>Camara: Confirma ojos cerrados o cabeceo
+    Camara->>Flask: POST /api/deteccion
+    Flask->>MySQL: Guarda tipo_evento, video_path, EAR, Pitch y duracion
+    Camara->>ESP32: GET /alerta_on
+    ESP32->>ESP32: PIN_BUZZER = HIGH y PIN_MOTOR = HIGH
+    Note over ESP32: Suena buzzer y vibra el motor
+    Camara->>Camara: Verifica recuperacion del conductor
+    Camara->>ESP32: GET /alerta_off
+    ESP32->>ESP32: PIN_BUZZER = LOW y PIN_MOTOR = LOW
+```
+
+##### Cómo se conecta el ESP32 con el resto del código
+
+El ESP32 no detecta somnolencia por sí mismo. El ESP32 solo recibe órdenes y acciona la alarma física. La detección la hace el archivo principal de Python:
+
+```text
+deteccion_tiempo_real.py
+```
+
+Ese archivo usa la cámara, MediaPipe, el modelo de IA, el cálculo de EAR y el cálculo de Pitch. Cuando confirma una somnolencia, se comunica con dos destinos distintos:
+
+1.  **Backend Flask:** para registrar la detección en la base de datos.
+2.  **ESP32:** para encender buzzer y vibración.
+
+###### Variables que conectan Python con el ESP32
+
+En [deteccion_tiempo_real.py](file:///c:/Users/juanc/vision/vision/deteccion_tiempo_real.py) aparecen estas constantes:
+
+```python
+ESP32_IP = os.getenv("VISION_ESP32_IP", "10.237.3.214")
+ESP32_TIMEOUT_SECONDS = 0.8
+VISION_SERVER_URL = os.getenv("VISION_SERVER_URL", "http://127.0.0.1:5050").rstrip("/")
+VISION_API_KEY = os.getenv("VISION_API_KEY", "vision-internal-key")
+VISION_DEVICE_ID = os.getenv("VISION_DEVICE_ID", "ESP32-657593")
+```
+
+Cada una cumple una función:
+
+*   `ESP32_IP`: IP local del ESP32. Es la IP que imprime el ESP32 en el monitor serie con `WiFi.localIP()`.
+*   `ESP32_TIMEOUT_SECONDS`: tiempo máximo que Python espera una respuesta del ESP32.
+*   `VISION_SERVER_URL`: dirección del servidor Flask.
+*   `VISION_API_KEY`: clave interna para que Flask acepte el registro de detecciones.
+*   `VISION_DEVICE_ID`: identificador del dispositivo. Sirve para que Flask sepa a qué usuario pertenece ese ESP32.
+
+La conexión física con el ESP32 depende sobre todo de:
+
+```python
+ESP32_IP
+```
+
+Si el ESP32 imprime en el monitor serie:
+
+```text
+IP del ESP32: 192.168.1.50
+```
+
+entonces Python debe apuntar a esa IP:
+
+```powershell
+$env:VISION_ESP32_IP="192.168.1.50"
+```
+
+###### Función que envía la señal al ESP32
+
+En `deteccion_tiempo_real.py`, la función central para hablar con el ESP32 es:
+
+```python
+def _enviar_peticion_esp32(ruta):
+    url = f"http://{ESP32_IP}{ruta}"
+
+    try:
+        respuesta = requests.get(url, timeout=ESP32_TIMEOUT_SECONDS)
+        respuesta.raise_for_status()
+        print(f"[ESP32] OK {ruta}: {respuesta.text}")
+        return True
+    except requests.exceptions.ConnectionError:
+        print(f"[ESP32] No se pudo conectar con {url}")
+    except requests.exceptions.Timeout:
+        print(f"[ESP32] Timeout al conectar con {url}")
+    except requests.exceptions.RequestException as exc:
+        print(f"[ESP32] Error HTTP en {url}: {exc}")
+
+    return False
+```
+
+Esta función arma una URL usando la IP del ESP32 y la ruta que se quiere llamar.
+
+Si recibe:
+
+```python
+"/alerta_on"
+```
+
+arma:
+
+```text
+http://IP_DEL_ESP32/alerta_on
+```
+
+Y si recibe:
+
+```python
+"/alerta_off"
+```
+
+arma:
+
+```text
+http://IP_DEL_ESP32/alerta_off
+```
+
+Después usa:
+
+```python
+requests.get(url, timeout=ESP32_TIMEOUT_SECONDS)
+```
+
+Eso significa que Python hace una petición HTTP GET al servidor que está corriendo dentro del ESP32.
+
+###### Funciones específicas para prender y apagar
+
+Python tiene dos funciones simples:
+
+```python
+def enviar_alerta_on():
+    """Activa motor vibrador y buzzer en el ESP32."""
+    return _enviar_peticion_esp32("/alerta_on")
+
+
+def enviar_alerta_off():
+    """Apaga motor vibrador y buzzer en el ESP32."""
+    return _enviar_peticion_esp32("/alerta_off")
+```
+
+Estas funciones se conectan directamente con las rutas del ESP32:
+
+| Python | ESP32 | Resultado |
+|---|---|---|
+| `enviar_alerta_on()` | `/alerta_on` | Enciende buzzer y vibración |
+| `enviar_alerta_off()` | `/alerta_off` | Apaga buzzer y vibración |
+
+En el archivo `.ino`, esas rutas están declaradas así:
+
+```cpp
+server.on("/alerta_on", alertaOn);
+server.on("/alerta_off", alertaOff);
+```
+
+Por eso, cuando Python llama `/alerta_on`, el ESP32 ejecuta:
+
+```cpp
+void alertaOn() {
+  aplicarAlarma(true);
+  server.send(200, "text/plain", "Alerta ACTIVADA");
+}
+```
+
+Y cuando Python llama `/alerta_off`, ejecuta:
+
+```cpp
+void alertaOff() {
+  aplicarAlarma(false);
+  server.send(200, "text/plain", "Alerta DESACTIVADA");
+}
+```
+
+###### Controlador de alarma en Python
+
+En `deteccion_tiempo_real.py` existe esta clase:
+
+```python
+class Esp32AlarmController:
+    """Envia ordenes al ESP32 solo cuando cambia el estado de somnolencia."""
+
+    def __init__(self):
+        self.alarma_activada = False
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._executor.submit(enviar_alerta_off)
+
+    def update(self, somnolencia_detectada):
+        if somnolencia_detectada == self.alarma_activada:
+            return
+
+        self.alarma_activada = somnolencia_detectada
+        accion = enviar_alerta_on if somnolencia_detectada else enviar_alerta_off
+        self._executor.submit(accion)
+```
+
+Esta clase evita mandar la misma orden muchas veces por segundo.
+
+Por ejemplo:
+
+*   Si la alarma ya está encendida y la IA sigue detectando somnolencia, no vuelve a llamar `/alerta_on` innecesariamente.
+*   Si la alarma estaba apagada y aparece somnolencia confirmada, llama una sola vez a `/alerta_on`.
+*   Si la alarma estaba encendida y el conductor se recupera, llama una sola vez a `/alerta_off`.
+
+También usa:
+
+```python
+ThreadPoolExecutor(max_workers=1)
+```
+
+Esto manda la petición al ESP32 en un hilo separado, para que la cámara no se congele esperando la respuesta de red.
+
+###### Dónde se crea el controlador
+
+Dentro de la función principal de detección:
+
+```python
+def run_realtime_detection():
+    ...
+    alarm_controller = Esp32AlarmController()
+    detection_reporter = DetectionReporter()
+    blackbox_recorder = BlackBoxRecorder(detection_reporter)
+```
+
+Ahí se crean tres piezas:
+
+*   `alarm_controller`: maneja el buzzer y la vibración del ESP32.
+*   `detection_reporter`: registra la detección en Flask.
+*   `blackbox_recorder`: maneja el video de evidencia tipo caja negra.
+
+###### Dónde se decide si prender la alarma
+
+En cada frame de la cámara, Python calcula:
+
+```python
+somnolencia_detectada = decision.head_drowsy or decision.eye_drowsy
+```
+
+Esto significa:
+
+*   `decision.eye_drowsy`: hay somnolencia por ojos cerrados.
+*   `decision.head_drowsy`: hay somnolencia por cabeceo.
+
+Si cualquiera de las dos es verdadera, hay riesgo.
+
+Después se evalúa si el conductor ya se recuperó:
+
+```python
+recuperado = driver_recovered(
+    face_detected,
+    decision,
+    eye_evidence,
+    head_evidence,
+)
+```
+
+La función `driver_recovered` exige que:
+
+*   haya rostro detectado,
+*   no haya somnolencia por ojos ni cabeza,
+*   los ojos estén abiertos,
+*   la cabeza haya vuelto a una postura normal.
+
+Luego se llama:
+
+```python
+alarma_confirmada = blackbox_recorder.update(
+    frame,
+    now,
+    somnolencia_detectada,
+    recuperado,
+    decision,
+    eye_evidence,
+    head_evidence,
+    recording_fps,
+)
+```
+
+`blackbox_recorder.update(...)` confirma el evento y maneja la grabación del video. Devuelve si la alarma debe estar activa o no:
+
+```python
+alarm_controller.update(alarma_confirmada)
+```
+
+Esa línea es la conexión final entre la detección y el ESP32.
+
+Si `alarma_confirmada` es `True`, Python manda:
+
+```text
+GET http://IP_DEL_ESP32/alerta_on
+```
+
+Si `alarma_confirmada` pasa a `False`, Python manda:
+
+```text
+GET http://IP_DEL_ESP32/alerta_off
+```
+
+###### Conexión con Flask y la base de datos
+
+La alarma física y el registro en base de datos salen del mismo archivo, pero van a lugares distintos.
+
+Para registrar la detección, `DetectionReporter` arma este payload:
+
+```python
+payload = {
+    "api_key": VISION_API_KEY,
+    "device_id": VISION_DEVICE_ID,
+    "tipo_evento": event.tipo_evento,
+    "video_path": event.video_path,
+    "valor_ear": event.valor_ear,
+    "valor_pitch": event.valor_pitch,
+    "duracion_alerta": event.duracion_alerta,
+    "estado": event.estado,
+    "confianza": event.confianza,
+    "duracion_video": event.video_seconds,
+}
+```
+
+Y lo envía al backend Flask:
+
+```python
+url = f"{VISION_SERVER_URL}/api/deteccion"
+response = requests.post(url, json=payload, timeout=3.0)
+```
+
+En Flask, esa petición llega a [app/controllers.py](file:///c:/Users/juanc/vision/vision/app/controllers.py), en la ruta:
+
+```python
+@bp.route('/api/deteccion', methods=['POST'])
+def api_deteccion():
+```
+
+Ahí Flask valida la API key:
+
+```python
+if not data or data.get('api_key') != current_app.config['VISION_API_KEY']:
+    abort(401)
+```
+
+Después busca el dispositivo por `device_id`:
+
+```python
+dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+```
+
+Si el dispositivo está vinculado, obtiene el usuario dueño:
+
+```python
+usuario_id = dispositivo.usuario_id
+```
+
+Y guarda la detección en MySQL:
+
+```python
+det, stats = registrar_deteccion_mysql(
+    usuario_id=int(usuario_id),
+    tipo_evento=data['tipo_evento'],
+    video_path=data.get('video_path') or 'sin_video',
+    valor_ear=data.get('valor_ear'),
+    valor_pitch=data.get('valor_pitch'),
+    duracion_alerta=data.get('duracion_alerta'),
+)
+```
+
+Entonces, ante una somnolencia, el proyecto hace dos acciones coordinadas:
+
+1.  `POST /api/deteccion` hacia Flask: registra el evento en la base de datos.
+2.  `GET /alerta_on` hacia el ESP32: activa buzzer y vibración.
+
+###### Resumen de archivos conectados
+
+| Archivo | Rol |
+|---|---|
+| `deteccion_tiempo_real.py` | Detecta ojos cerrados/cabeceo, registra eventos y manda órdenes al ESP32 |
+| `esp32_alerta_wifi.ino` | Recibe `/alerta_on` y `/alerta_off`; prende/apaga buzzer y motor |
+| `app/controllers.py` | Recibe `/api/deteccion`, valida el dispositivo y guarda en base de datos |
+| `app/models.py` | Define tablas como `Dispositivo`, `Deteccion`, `Usuario` y `EstadisticaSeguridad` |
+| `app/services.py` | Contiene la lógica que inserta la detección y actualiza estadísticas |
+
+###### Frase ideal para defender esta conexión
+
+> "El ESP32 se conecta con el resto del sistema a través de HTTP. El archivo `deteccion_tiempo_real.py` detecta la somnolencia con cámara e IA. Cuando confirma el evento, por un lado envía un `POST` a Flask en `/api/deteccion` para guardar la alerta en MySQL, y por otro lado envía un `GET` al ESP32 en `/alerta_on`. El ESP32 recibe esa ruta en su servidor interno y ejecuta `aplicarAlarma(true)`, activando el buzzer y el motor vibrador. Cuando la IA confirma recuperación, Python llama `/alerta_off` y el ESP32 apaga ambos actuadores."
+
+##### Frase ideal para defenderlo oralmente
+
+> "El ESP32 funciona como un servidor HTTP local. Al iniciar, se conecta al WiFi, configura el pin 22 para el buzzer y el pin 23 para el motor vibrador, y queda escuchando peticiones. Cuando la IA detecta somnolencia, primero registra la detección en el backend y luego llama a `/alerta_on` en el ESP32. Esa ruta ejecuta `aplicarAlarma(true)`, que pone ambos pines en `HIGH` y activa sonido y vibración. Cuando el conductor se recupera, se llama a `/alerta_off`, que pone ambos pines en `LOW` y apaga la alerta."
+
+---
+
 ## 3. ANÁLISIS ESTRUCTURAL DE LA BASE DE DATOS
 
 Nuestro proyecto utiliza una base de datos relacional robusta. A continuación se detallan las tablas y la forma en que se comunican.
