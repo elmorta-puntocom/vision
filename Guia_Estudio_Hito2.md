@@ -1798,5 +1798,287 @@ Aquí tienes una lista de 10 preguntas desafiantes que la profesora Yanil Bertha
     > "Para cuidar la integridad referencial, en el modelo de base de datos definimos comportamientos específicos ante borrados. En la tabla de `detecciones`, usamos la regla `ON DELETE CASCADE`. Si borramos un usuario de la base de datos, todas sus detecciones de fatiga asociadas se eliminan automáticamente para no ocupar espacio innecesario. Sin embargo, en la tabla de `dispositivos` usamos la regla `ON DELETE SET NULL`. De esta forma, si borramos al usuario conductor, el dispositivo físico ESP32 no se borra de la base de datos; simplemente su columna `usuario_id` pasa a ser `NULL` (Vacía). Así, el dispositivo físico queda liberado de fábrica para poder ser vinculado a un nuevo conductor."
 
 ---
+
+## 6. CASO PRACTICO: AGREGAR UNA CARACTERISTICA DESDE MYSQL Y MOSTRARLA EN UNA VISTA
+
+### Situacion posible del examen
+
+Te pueden pedir algo como:
+
+> "Agregale a la tabla `usuarios` un numero de telefono y mostralo en el dashboard del usuario que esta actualmente en sesion."
+
+La forma mas facil, parecida a hacerlo manualmente desde MySQL, es:
+
+1. Agregar la columna `telefono` en la tabla `usuarios` desde MySQL o phpMyAdmin.
+2. Cargarle un numero de telefono a un usuario especifico desde MySQL.
+3. Agregar esa misma columna en el modelo `Usuario` dentro de `app/models.py`.
+4. Mostrar el dato en la vista con `{{ current_user.telefono }}`.
+5. Tocar `controllers.py` solamente si tambien queres cargar o modificar ese dato desde un formulario.
+
+### Si lo agrego directamente desde MySQL, funciona?
+
+Si, funcionaria, siempre que hagas estas dos cosas:
+
+1. Que la columna exista realmente en MySQL.
+2. Que la columna tambien este declarada en `app/models.py`.
+
+La base de datos y el modelo de Python tienen que coincidir. MySQL guarda la estructura real de la tabla, pero Flask trabaja con objetos de SQLAlchemy. En este proyecto, el objeto que representa a la tabla `usuarios` es la clase `Usuario` de `app/models.py`.
+
+Si agregas `telefono` solo en MySQL pero no en `models.py`, la base de datos va a tener la columna, pero Flask no la va a conocer como atributo del usuario. Por eso podria fallar algo como:
+
+```html
+{{ current_user.telefono }}
+```
+
+En cambio, si la columna existe en MySQL y tambien esta declarada en el modelo, Flask puede traer ese dato y Jinja puede mostrarlo en la vista.
+
+### Paso 1: agregar la columna desde MySQL o phpMyAdmin
+
+En MySQL, la columna se puede crear asi:
+
+```sql
+ALTER TABLE usuarios
+ADD COLUMN telefono VARCHAR(30) NULL;
+```
+
+Si lo haces desde phpMyAdmin:
+
+1. Entrar a la base de datos del proyecto.
+2. Abrir la tabla `usuarios`.
+3. Ir a **Estructura**.
+4. Elegir **Agregar columna**.
+5. Nombre: `telefono`.
+6. Tipo: `VARCHAR`.
+7. Longitud: `30`.
+8. Permitir `NULL`.
+9. Guardar.
+
+Se deja como `NULL` porque probablemente ya haya usuarios creados. Si la columna fuera obligatoria desde el principio, los usuarios viejos no tendrian telefono y eso podria generar problemas.
+
+### Paso 2: cargarle un telefono a un usuario especifico desde MySQL
+
+Una vez creada la columna, podes editar directamente una fila desde phpMyAdmin o usar SQL.
+
+Ejemplo:
+
+```sql
+UPDATE usuarios
+SET telefono = '3571123456'
+WHERE id = 1;
+```
+
+Ese ejemplo le carga el telefono `3571123456` al usuario cuyo `id` es `1`.
+
+Tambien podrias buscarlo por email:
+
+```sql
+UPDATE usuarios
+SET telefono = '3571123456'
+WHERE email = 'usuario@ejemplo.com';
+```
+
+Lo importante es cargar el dato en el mismo usuario con el que despues vas a iniciar sesion. Si inicias sesion con otro usuario, `current_user.telefono` va a mostrar el telefono de ese otro usuario, no el que editaste.
+
+### Paso 3: agregar la columna en `models.py`
+
+Abrir `app/models.py` y buscar:
+
+```python
+class Usuario(UserMixin, db.Model):
+    __tablename__ = 'usuarios'
+```
+
+Dentro de esa clase, agregar:
+
+```python
+telefono = db.Column(db.String(30), nullable=True)
+```
+
+Por ejemplo:
+
+```python
+class Usuario(UserMixin, db.Model):
+    __tablename__ = 'usuarios'
+
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(100), nullable=False)
+    apellido = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(150), unique=True, nullable=False)
+    telefono = db.Column(db.String(30), nullable=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    fecha_registro = db.Column(db.DateTime, default=datetime.utcnow)
+```
+
+Esta linea no crea necesariamente la columna en una tabla ya existente. Lo que hace es decirle a Flask/SQLAlchemy: "la tabla `usuarios` tambien tiene un campo llamado `telefono`".
+
+### Paso 4: mostrar el telefono en una vista
+
+Si el telefono es del usuario que inicio sesion, no hace falta hacer una consulta nueva en `controllers.py`. Flask-Login ya nos da `current_user`, que representa al usuario autenticado.
+
+En `app/templates/dashboard.html`, donde ya se muestran datos como nombre, apellido o correo, se puede agregar:
+
+```html
+<div class="account-field">
+    <label>Telefono</label>
+    <div class="val">{{ current_user.telefono }}</div>
+</div>
+```
+
+Mejor todavia:
+
+```html
+<div class="account-field">
+    <label>Telefono</label>
+    <div class="val">{{ current_user.telefono or 'Sin cargar' }}</div>
+</div>
+```
+
+La segunda version es mas prolija, porque si el usuario no tiene telefono cargado, en vez de quedar vacio aparece `Sin cargar`.
+
+### Necesito tocar `controllers.py`?
+
+Para solo mostrar el telefono del usuario actual, no necesariamente.
+
+No haria falta agregar una consulta como:
+
+```python
+usuario = Usuario.query.get(current_user.id)
+```
+
+porque `current_user` ya es el usuario actual. Si el modelo tiene `telefono`, entonces la vista puede usar directamente:
+
+```html
+{{ current_user.telefono }}
+```
+
+Si te piden que el usuario pueda cargar o modificar su telefono desde una vista, ahi si hay que tocar `controllers.py`.
+
+### Variante: tambien permitir editar el telefono desde la aplicacion
+
+Si no queres cargar el telefono desde MySQL cada vez, podes agregarlo a la vista de editar usuario.
+
+Archivos que se tocarian:
+
+* `app/templates/editar_usuario.html`
+* `app/controllers.py`
+
+En `app/templates/editar_usuario.html`, dentro del formulario:
+
+```html
+<div class="form-group">
+    <label for="telefono">Telefono</label>
+    <input
+        type="text"
+        id="telefono"
+        name="telefono"
+        value="{{ usuario.telefono or '' }}"
+    >
+</div>
+```
+
+En `app/controllers.py`, dentro de la ruta que procesa la edicion del usuario, se lee el campo:
+
+```python
+telefono = request.form.get('telefono', '').strip()
+```
+
+Y antes del `db.session.commit()` se guarda:
+
+```python
+usuario.telefono = telefono
+```
+
+Ejemplo de idea general:
+
+```python
+if request.method == 'POST':
+    usuario.nombre = request.form.get('nombre', '').strip()
+    usuario.apellido = request.form.get('apellido', '').strip()
+    usuario.telefono = request.form.get('telefono', '').strip()
+
+    db.session.commit()
+```
+
+La logica es: el formulario manda el dato, Flask lo recibe con `request.form`, se asigna al objeto `usuario`, y `db.session.commit()` lo guarda en MySQL.
+
+### Variante: pedir el telefono durante el registro
+
+Si te piden que el telefono se cargue cuando el usuario se registra, se toca:
+
+* `app/templates/register.html`
+* `app/controllers.py`, en la ruta `register`
+
+En el formulario de registro:
+
+```html
+<div class="form-group">
+    <label for="telefono">Telefono</label>
+    <input
+        type="text"
+        id="telefono"
+        name="telefono"
+        value="{{ form_data.telefono if form_data else '' }}"
+    >
+</div>
+```
+
+En `controllers.py`, dentro de `register`, donde se leen los otros campos:
+
+```python
+nombre = request.form.get('nombre', '').strip()
+apellido = request.form.get('apellido', '').strip()
+email = request.form.get('email', '').strip().lower()
+telefono = request.form.get('telefono', '').strip()
+pw = request.form.get('password', '')
+pw2 = request.form.get('confirm_password', '')
+```
+
+Y al crear el usuario:
+
+```python
+u = Usuario(
+    nombre=nombre,
+    apellido=apellido,
+    email=email,
+    telefono=telefono,
+)
+```
+
+Si hay errores de validacion, conviene devolver tambien el telefono en `form_data`, asi no se borra del formulario:
+
+```python
+return render_template(
+    'register.html',
+    form_data={
+        'nombre': nombre,
+        'apellido': apellido,
+        'email': email,
+        'telefono': telefono,
+    },
+)
+```
+
+### Checklist usando esta forma manual
+
+1. En MySQL/phpMyAdmin: crear la columna `telefono` en la tabla `usuarios`.
+2. En MySQL/phpMyAdmin: cargarle un telefono al usuario que vas a probar.
+3. En `app/models.py`: agregar `telefono = db.Column(db.String(30), nullable=True)` dentro de `Usuario`.
+4. En la vista, por ejemplo `dashboard.html`: agregar `{{ current_user.telefono or 'Sin cargar' }}`.
+5. Reiniciar la aplicacion Flask si estaba prendida.
+6. Iniciar sesion con el usuario al que le cargaste el telefono.
+7. Verificar que el telefono aparezca en la vista.
+
+### Errores comunes
+
+* Si aparece vacio, revisar que el telefono este cargado en el mismo usuario con el que iniciaste sesion.
+* Si aparece un error diciendo que `telefono` no existe, revisar que la columna este agregada tanto en MySQL como en `app/models.py`.
+* Si modificaste `models.py` con la aplicacion prendida, reiniciar Flask.
+* Si usaste `{{ usuario.telefono }}` pero en esa vista no existe una variable llamada `usuario`, usar `{{ current_user.telefono }}` si queres el usuario en sesion.
+
+### Respuesta corta para decir en el oral
+
+> "Si quiero hacerlo de forma simple, puedo agregar la columna `telefono` directamente en MySQL como `VARCHAR(30) NULL`, cargarle un numero a un usuario especifico y despues declarar esa misma columna en el modelo `Usuario` de `app/models.py` con `telefono = db.Column(db.String(30), nullable=True)`. Para mostrarlo en una vista uso `{{ current_user.telefono or 'Sin cargar' }}`, porque `current_user` es el usuario que inicio sesion. Solo necesito tocar `controllers.py` si quiero que el telefono se cargue o edite desde un formulario de la aplicacion."
+
+---
 *Fin del Documento de Estudio Hito 2.*  
 *¡Muchos éxitos Dylan y Juan Cruz en la defensa con la profesora Yanil Berthalet!*
