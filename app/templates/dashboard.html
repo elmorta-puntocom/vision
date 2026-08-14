@@ -477,6 +477,7 @@
             <div class="dash-greeting">// Telemetría en vivo</div>
             <h1 class="dash-title">Conductor: {{ current_user.nombre }} {{ current_user.apellido }}</h1>
             <div class="dash-meta" style="margin-top: 0.3rem;">{{ current_user.email }}</div>
+        
         </div>
         <div class="dash-actions">
             <a class="dash-action-btn" href="{{ url_for('main.editar_usuario', user_id=current_user.id) }}">
@@ -488,7 +489,7 @@
             {% if current_user.has_role('Administrador') %}
             <a class="dash-action-btn outline" href="{{ url_for('main.admin_base_datos') }}">
                 Panel admin
-            </a>
+            </a> 
             {% endif %}
         </div>
     </div>
