@@ -162,6 +162,677 @@ sequenceDiagram
 
 ---
 
+#### 3. Explicación del código `esp32_alerta_wifi.ino`
+
+El archivo [esp32_alerta_wifi.ino](file:///c:/Users/juanc/vision/vision/esp32_alerta_wifi/esp32_alerta_wifi.ino) es el firmware que corre dentro del ESP32. Su función dentro del proyecto VISION es actuar como **módulo físico de alerta**: cuando el sistema de visión artificial detecta somnolencia, además de registrar la detección en la base de datos, envía una petición HTTP al ESP32 para encender un buzzer y un motor vibrador.
+
+En palabras simples: Python detecta el riesgo, Flask registra el evento, y el ESP32 despierta al conductor con sonido y vibración.
+
+##### Librerías incluidas
+
+```cpp
+#include <WiFi.h>
+#include <WebServer.h>
+```
+
+*   `WiFi.h`: permite que el ESP32 se conecte a una red WiFi.
+*   `WebServer.h`: permite levantar un servidor HTTP dentro del ESP32. Gracias a esto, otro programa puede entrar a rutas como `/alerta_on` o `/alerta_off`.
+
+Esto es importante porque el ESP32 no necesita pantalla ni teclado. Recibe órdenes por red.
+
+##### Credenciales de WiFi
+
+```cpp
+const char* SSID = "¿quien lo diria?";
+const char* PASSWORD = "povwhenbut";
+```
+
+Estas constantes guardan el nombre y la contraseña de la red WiFi a la que se conectará el ESP32. Cuando arranca, las usa en:
+
+```cpp
+WiFi.begin(SSID, PASSWORD);
+```
+
+**Respuesta oral corta:**
+
+> "El ESP32 necesita conectarse al mismo entorno de red que el sistema de detección para poder recibir la orden HTTP que activa la alarma."
+
+##### Pines del motor vibrador y buzzer
+
+```cpp
+const int PIN_MOTOR = 23;
+const int PIN_BUZZER = 22;
+```
+
+Acá se define qué pines físicos del ESP32 controlan cada actuador:
+
+*   `PIN_MOTOR = 23`: controla el motor vibrador.
+*   `PIN_BUZZER = 22`: controla el buzzer activo.
+
+Cuando el pin se pone en `HIGH`, el componente se enciende. Cuando se pone en `LOW`, se apaga. En el contexto del proyecto, si se detecta somnolencia ambos pines pasan a `HIGH`; si el conductor se recupera, ambos vuelven a `LOW`.
+
+##### Servidor HTTP en el puerto 80
+
+```cpp
+WebServer server(80);
+```
+
+Esta línea crea un servidor web dentro del ESP32 usando el puerto 80, que es el puerto HTTP tradicional. Gracias a esto, el ESP32 puede responder a direcciones como:
+
+```text
+http://IP_DEL_ESP32/
+http://IP_DEL_ESP32/estado
+http://IP_DEL_ESP32/alerta_on
+http://IP_DEL_ESP32/alerta_off
+```
+
+Por ejemplo, si el monitor serie muestra que la IP es `192.168.1.50`, el sistema puede activar la alarma llamando:
+
+```text
+http://192.168.1.50/alerta_on
+```
+
+##### Variable de estado `alarmaActiva`
+
+```cpp
+bool alarmaActiva = false;
+```
+
+Esta variable guarda si la alarma está activa o apagada:
+
+*   `false`: alarma apagada.
+*   `true`: alarma encendida.
+
+No controla por sí sola el buzzer ni el motor; sirve para recordar el estado actual y poder informarlo en la ruta `/estado`.
+
+##### Función central `aplicarAlarma`
+
+```cpp
+void aplicarAlarma(bool activar) {
+  alarmaActiva = activar;
+
+  digitalWrite(PIN_MOTOR, activar ? HIGH : LOW);
+  digitalWrite(PIN_BUZZER, activar ? HIGH : LOW);
+
+  Serial.println(activar ? "Alarma ACTIVADA" : "Alarma DESACTIVADA");
+}
+```
+
+Esta es la función más importante del firmware. Recibe un valor booleano:
+
+*   `true`: enciende la alarma.
+*   `false`: apaga la alarma.
+
+Primero actualiza la variable:
+
+```cpp
+alarmaActiva = activar;
+```
+
+Luego prende o apaga el motor vibrador:
+
+```cpp
+digitalWrite(PIN_MOTOR, activar ? HIGH : LOW);
+```
+
+Y hace lo mismo con el buzzer:
+
+```cpp
+digitalWrite(PIN_BUZZER, activar ? HIGH : LOW);
+```
+
+La expresión:
+
+```cpp
+activar ? HIGH : LOW
+```
+
+significa: "si `activar` es verdadero, usar `HIGH`; si es falso, usar `LOW`".
+
+Finalmente escribe en el monitor serie:
+
+```cpp
+Serial.println(activar ? "Alarma ACTIVADA" : "Alarma DESACTIVADA");
+```
+
+Esto ayuda a verificar que el ESP32 recibió la orden correctamente.
+
+##### Ruta `/` y `/estado`: consultar el estado
+
+```cpp
+void responderEstado() {
+  String estado = alarmaActiva ? "ON" : "OFF";
+  server.send(200, "text/plain", "ESP32 OK - Alarma: " + estado);
+}
+```
+
+Esta función responde si el ESP32 está funcionando y si la alarma está prendida o apagada. Si `alarmaActiva` es `true`, responde `ESP32 OK - Alarma: ON`; si está apagada, responde `ESP32 OK - Alarma: OFF`.
+
+##### Ruta `/alerta_on`: encender alarma y vibración
+
+```cpp
+void alertaOn() {
+  aplicarAlarma(true);
+  server.send(200, "text/plain", "Alerta ACTIVADA");
+}
+```
+
+Esta función se ejecuta cuando llega una petición HTTP a `/alerta_on`. Hace dos cosas:
+
+1.  Llama a `aplicarAlarma(true)`.
+2.  Responde al cliente con el texto `"Alerta ACTIVADA"`.
+
+En el proyecto, esta ruta se llama cuando la IA detecta que el conductor está en riesgo por ojos cerrados, cabeceo o ambos. En ese momento el ESP32 pone en `HIGH` los pines 23 y 22, encendiendo el motor vibrador y el buzzer.
+
+##### Ruta `/alerta_off`: apagar alarma y vibración
+
+```cpp
+void alertaOff() {
+  aplicarAlarma(false);
+  server.send(200, "text/plain", "Alerta DESACTIVADA");
+}
+```
+
+Esta función se ejecuta cuando llega una petición HTTP a `/alerta_off`. Apaga ambos actuadores llamando a:
+
+```cpp
+aplicarAlarma(false);
+```
+
+En el sistema VISION esto representa la recuperación del conductor: cuando la cámara confirma que los ojos volvieron a abrirse y la postura se estabilizó, se envía la orden de apagado.
+
+##### Ruta no encontrada
+
+```cpp
+void rutaNoEncontrada() {
+  server.send(404, "text/plain", "Ruta no encontrada");
+}
+```
+
+Si alguien entra a una ruta inexistente, el ESP32 responde con error `404`. Por ejemplo, `/prueba` respondería `Ruta no encontrada`.
+
+##### `setup()`: configuración inicial
+
+```cpp
+void setup() {
+  Serial.begin(115200);
+```
+
+`setup()` se ejecuta una sola vez cuando el ESP32 prende o se reinicia. La línea `Serial.begin(115200)` inicia la comunicación con el monitor serie para ver mensajes de depuración.
+
+```cpp
+pinMode(PIN_MOTOR, OUTPUT);
+pinMode(PIN_BUZZER, OUTPUT);
+aplicarAlarma(false);
+```
+
+Estas líneas configuran los pines 23 y 22 como salidas eléctricas. Después llaman a `aplicarAlarma(false)` para garantizar que al arrancar el ESP32 el buzzer y el motor estén apagados.
+
+```cpp
+WiFi.mode(WIFI_STA);
+WiFi.setSleep(false);
+```
+
+`WIFI_STA` significa "modo estación": el ESP32 se conecta a un router existente, no crea su propia red. `WiFi.setSleep(false)` desactiva el ahorro de energía del WiFi. Esto es útil porque el dispositivo debe responder rápido cuando llega una alerta de somnolencia.
+
+```cpp
+WiFi.begin(SSID, PASSWORD);
+```
+
+Inicia la conexión WiFi usando las credenciales configuradas arriba.
+
+```cpp
+while (WiFi.status() != WL_CONNECTED) {
+  delay(500);
+  Serial.print(".");
+}
+```
+
+Este bucle espera hasta que el ESP32 se conecte a WiFi. Cada medio segundo imprime un punto en el monitor serie.
+
+Cuando se conecta:
+
+```cpp
+Serial.println("Conectado");
+Serial.print("IP del ESP32: ");
+Serial.println(WiFi.localIP());
+```
+
+Muestra la IP asignada por el router. Esa IP es importante porque es la dirección a la que Python o Flask deben enviar las órdenes.
+
+##### Registro de rutas del servidor
+
+```cpp
+server.on("/", responderEstado);
+server.on("/estado", responderEstado);
+server.on("/alerta_on", alertaOn);
+server.on("/alerta_off", alertaOff);
+server.onNotFound(rutaNoEncontrada);
+```
+
+Estas líneas conectan cada URL con su función:
+
+*   `/`: muestra estado general.
+*   `/estado`: muestra estado general.
+*   `/alerta_on`: enciende buzzer y vibración.
+*   `/alerta_off`: apaga buzzer y vibración.
+*   cualquier otra ruta: responde 404.
+
+Es como decirle al ESP32: "si te piden esta dirección, ejecutá esta función".
+
+##### Inicio del servidor
+
+```cpp
+server.begin();
+Serial.println("Servidor HTTP iniciado en puerto 80");
+```
+
+`server.begin()` deja el servidor listo para escuchar peticiones HTTP. Desde ese momento, el ESP32 queda esperando órdenes de encendido o apagado.
+
+##### `loop()`: mantener vivo el servidor
+
+```cpp
+void loop() {
+  server.handleClient();
+}
+```
+
+`loop()` se ejecuta infinitamente mientras el ESP32 está prendido. `server.handleClient()` revisa si llegó alguna petición HTTP. Si llega una petición a `/alerta_on`, ejecuta `alertaOn()`. Si llega a `/alerta_off`, ejecuta `alertaOff()`.
+
+Esta línea es fundamental: sin ella, el servidor estaría iniciado, pero no procesaría las órdenes.
+
+##### Flujo completo durante una detección de somnolencia
+
+```mermaid
+sequenceDiagram
+    participant Camara as Camara + IA Python
+    participant Flask as Backend Flask
+    participant MySQL as Base de Datos
+    participant ESP32 as ESP32 Alarma Fisica
+
+    Camara->>Camara: Calcula EAR y Pitch
+    Camara->>Camara: Confirma ojos cerrados o cabeceo
+    Camara->>Flask: POST /api/deteccion
+    Flask->>MySQL: Guarda tipo_evento, video_path, EAR, Pitch y duracion
+    Camara->>ESP32: GET /alerta_on
+    ESP32->>ESP32: PIN_BUZZER = HIGH y PIN_MOTOR = HIGH
+    Note over ESP32: Suena buzzer y vibra el motor
+    Camara->>Camara: Verifica recuperacion del conductor
+    Camara->>ESP32: GET /alerta_off
+    ESP32->>ESP32: PIN_BUZZER = LOW y PIN_MOTOR = LOW
+```
+
+##### Cómo se conecta el ESP32 con el resto del código
+
+El ESP32 no detecta somnolencia por sí mismo. El ESP32 solo recibe órdenes y acciona la alarma física. La detección la hace el archivo principal de Python:
+
+```text
+deteccion_tiempo_real.py
+```
+
+Ese archivo usa la cámara, MediaPipe, el modelo de IA, el cálculo de EAR y el cálculo de Pitch. Cuando confirma una somnolencia, se comunica con dos destinos distintos:
+
+1.  **Backend Flask:** para registrar la detección en la base de datos.
+2.  **ESP32:** para encender buzzer y vibración.
+
+###### Variables que conectan Python con el ESP32
+
+En [deteccion_tiempo_real.py](file:///c:/Users/juanc/vision/vision/deteccion_tiempo_real.py) aparecen estas constantes:
+
+```python
+ESP32_IP = os.getenv("VISION_ESP32_IP", "10.237.3.214")
+ESP32_TIMEOUT_SECONDS = 0.8
+VISION_SERVER_URL = os.getenv("VISION_SERVER_URL", "http://127.0.0.1:5050").rstrip("/")
+VISION_API_KEY = os.getenv("VISION_API_KEY", "vision-internal-key")
+VISION_DEVICE_ID = os.getenv("VISION_DEVICE_ID", "ESP32-657593")
+```
+
+Cada una cumple una función:
+
+*   `ESP32_IP`: IP local del ESP32. Es la IP que imprime el ESP32 en el monitor serie con `WiFi.localIP()`.
+*   `ESP32_TIMEOUT_SECONDS`: tiempo máximo que Python espera una respuesta del ESP32.
+*   `VISION_SERVER_URL`: dirección del servidor Flask.
+*   `VISION_API_KEY`: clave interna para que Flask acepte el registro de detecciones.
+*   `VISION_DEVICE_ID`: identificador del dispositivo. Sirve para que Flask sepa a qué usuario pertenece ese ESP32.
+
+La conexión física con el ESP32 depende sobre todo de:
+
+```python
+ESP32_IP
+```
+
+Si el ESP32 imprime en el monitor serie:
+
+```text
+IP del ESP32: 192.168.1.50
+```
+
+entonces Python debe apuntar a esa IP:
+
+```powershell
+$env:VISION_ESP32_IP="192.168.1.50"
+```
+
+###### Función que envía la señal al ESP32
+
+En `deteccion_tiempo_real.py`, la función central para hablar con el ESP32 es:
+
+```python
+def _enviar_peticion_esp32(ruta):
+    url = f"http://{ESP32_IP}{ruta}"
+
+    try:
+        respuesta = requests.get(url, timeout=ESP32_TIMEOUT_SECONDS)
+        respuesta.raise_for_status()
+        print(f"[ESP32] OK {ruta}: {respuesta.text}")
+        return True
+    except requests.exceptions.ConnectionError:
+        print(f"[ESP32] No se pudo conectar con {url}")
+    except requests.exceptions.Timeout:
+        print(f"[ESP32] Timeout al conectar con {url}")
+    except requests.exceptions.RequestException as exc:
+        print(f"[ESP32] Error HTTP en {url}: {exc}")
+
+    return False
+```
+
+Esta función arma una URL usando la IP del ESP32 y la ruta que se quiere llamar.
+
+Si recibe:
+
+```python
+"/alerta_on"
+```
+
+arma:
+
+```text
+http://IP_DEL_ESP32/alerta_on
+```
+
+Y si recibe:
+
+```python
+"/alerta_off"
+```
+
+arma:
+
+```text
+http://IP_DEL_ESP32/alerta_off
+```
+
+Después usa:
+
+```python
+requests.get(url, timeout=ESP32_TIMEOUT_SECONDS)
+```
+
+Eso significa que Python hace una petición HTTP GET al servidor que está corriendo dentro del ESP32.
+
+###### Funciones específicas para prender y apagar
+
+Python tiene dos funciones simples:
+
+```python
+def enviar_alerta_on():
+    """Activa motor vibrador y buzzer en el ESP32."""
+    return _enviar_peticion_esp32("/alerta_on")
+
+
+def enviar_alerta_off():
+    """Apaga motor vibrador y buzzer en el ESP32."""
+    return _enviar_peticion_esp32("/alerta_off")
+```
+
+Estas funciones se conectan directamente con las rutas del ESP32:
+
+| Python | ESP32 | Resultado |
+|---|---|---|
+| `enviar_alerta_on()` | `/alerta_on` | Enciende buzzer y vibración |
+| `enviar_alerta_off()` | `/alerta_off` | Apaga buzzer y vibración |
+
+En el archivo `.ino`, esas rutas están declaradas así:
+
+```cpp
+server.on("/alerta_on", alertaOn);
+server.on("/alerta_off", alertaOff);
+```
+
+Por eso, cuando Python llama `/alerta_on`, el ESP32 ejecuta:
+
+```cpp
+void alertaOn() {
+  aplicarAlarma(true);
+  server.send(200, "text/plain", "Alerta ACTIVADA");
+}
+```
+
+Y cuando Python llama `/alerta_off`, ejecuta:
+
+```cpp
+void alertaOff() {
+  aplicarAlarma(false);
+  server.send(200, "text/plain", "Alerta DESACTIVADA");
+}
+```
+
+###### Controlador de alarma en Python
+
+En `deteccion_tiempo_real.py` existe esta clase:
+
+```python
+class Esp32AlarmController:
+    """Envia ordenes al ESP32 solo cuando cambia el estado de somnolencia."""
+
+    def __init__(self):
+        self.alarma_activada = False
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._executor.submit(enviar_alerta_off)
+
+    def update(self, somnolencia_detectada):
+        if somnolencia_detectada == self.alarma_activada:
+            return
+
+        self.alarma_activada = somnolencia_detectada
+        accion = enviar_alerta_on if somnolencia_detectada else enviar_alerta_off
+        self._executor.submit(accion)
+```
+
+Esta clase evita mandar la misma orden muchas veces por segundo.
+
+Por ejemplo:
+
+*   Si la alarma ya está encendida y la IA sigue detectando somnolencia, no vuelve a llamar `/alerta_on` innecesariamente.
+*   Si la alarma estaba apagada y aparece somnolencia confirmada, llama una sola vez a `/alerta_on`.
+*   Si la alarma estaba encendida y el conductor se recupera, llama una sola vez a `/alerta_off`.
+
+También usa:
+
+```python
+ThreadPoolExecutor(max_workers=1)
+```
+
+Esto manda la petición al ESP32 en un hilo separado, para que la cámara no se congele esperando la respuesta de red.
+
+###### Dónde se crea el controlador
+
+Dentro de la función principal de detección:
+
+```python
+def run_realtime_detection():
+    ...
+    alarm_controller = Esp32AlarmController()
+    detection_reporter = DetectionReporter()
+    blackbox_recorder = BlackBoxRecorder(detection_reporter)
+```
+
+Ahí se crean tres piezas:
+
+*   `alarm_controller`: maneja el buzzer y la vibración del ESP32.
+*   `detection_reporter`: registra la detección en Flask.
+*   `blackbox_recorder`: maneja el video de evidencia tipo caja negra.
+
+###### Dónde se decide si prender la alarma
+
+En cada frame de la cámara, Python calcula:
+
+```python
+somnolencia_detectada = decision.head_drowsy or decision.eye_drowsy
+```
+
+Esto significa:
+
+*   `decision.eye_drowsy`: hay somnolencia por ojos cerrados.
+*   `decision.head_drowsy`: hay somnolencia por cabeceo.
+
+Si cualquiera de las dos es verdadera, hay riesgo.
+
+Después se evalúa si el conductor ya se recuperó:
+
+```python
+recuperado = driver_recovered(
+    face_detected,
+    decision,
+    eye_evidence,
+    head_evidence,
+)
+```
+
+La función `driver_recovered` exige que:
+
+*   haya rostro detectado,
+*   no haya somnolencia por ojos ni cabeza,
+*   los ojos estén abiertos,
+*   la cabeza haya vuelto a una postura normal.
+
+Luego se llama:
+
+```python
+alarma_confirmada = blackbox_recorder.update(
+    frame,
+    now,
+    somnolencia_detectada,
+    recuperado,
+    decision,
+    eye_evidence,
+    head_evidence,
+    recording_fps,
+)
+```
+
+`blackbox_recorder.update(...)` confirma el evento y maneja la grabación del video. Devuelve si la alarma debe estar activa o no:
+
+```python
+alarm_controller.update(alarma_confirmada)
+```
+
+Esa línea es la conexión final entre la detección y el ESP32.
+
+Si `alarma_confirmada` es `True`, Python manda:
+
+```text
+GET http://IP_DEL_ESP32/alerta_on
+```
+
+Si `alarma_confirmada` pasa a `False`, Python manda:
+
+```text
+GET http://IP_DEL_ESP32/alerta_off
+```
+
+###### Conexión con Flask y la base de datos
+
+La alarma física y el registro en base de datos salen del mismo archivo, pero van a lugares distintos.
+
+Para registrar la detección, `DetectionReporter` arma este payload:
+
+```python
+payload = {
+    "api_key": VISION_API_KEY,
+    "device_id": VISION_DEVICE_ID,
+    "tipo_evento": event.tipo_evento,
+    "video_path": event.video_path,
+    "valor_ear": event.valor_ear,
+    "valor_pitch": event.valor_pitch,
+    "duracion_alerta": event.duracion_alerta,
+    "estado": event.estado,
+    "confianza": event.confianza,
+    "duracion_video": event.video_seconds,
+}
+```
+
+Y lo envía al backend Flask:
+
+```python
+url = f"{VISION_SERVER_URL}/api/deteccion"
+response = requests.post(url, json=payload, timeout=3.0)
+```
+
+En Flask, esa petición llega a [app/controllers.py](file:///c:/Users/juanc/vision/vision/app/controllers.py), en la ruta:
+
+```python
+@bp.route('/api/deteccion', methods=['POST'])
+def api_deteccion():
+```
+
+Ahí Flask valida la API key:
+
+```python
+if not data or data.get('api_key') != current_app.config['VISION_API_KEY']:
+    abort(401)
+```
+
+Después busca el dispositivo por `device_id`:
+
+```python
+dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+```
+
+Si el dispositivo está vinculado, obtiene el usuario dueño:
+
+```python
+usuario_id = dispositivo.usuario_id
+```
+
+Y guarda la detección en MySQL:
+
+```python
+det, stats = registrar_deteccion_mysql(
+    usuario_id=int(usuario_id),
+    tipo_evento=data['tipo_evento'],
+    video_path=data.get('video_path') or 'sin_video',
+    valor_ear=data.get('valor_ear'),
+    valor_pitch=data.get('valor_pitch'),
+    duracion_alerta=data.get('duracion_alerta'),
+)
+```
+
+Entonces, ante una somnolencia, el proyecto hace dos acciones coordinadas:
+
+1.  `POST /api/deteccion` hacia Flask: registra el evento en la base de datos.
+2.  `GET /alerta_on` hacia el ESP32: activa buzzer y vibración.
+
+###### Resumen de archivos conectados
+
+| Archivo | Rol |
+|---|---|
+| `deteccion_tiempo_real.py` | Detecta ojos cerrados/cabeceo, registra eventos y manda órdenes al ESP32 |
+| `esp32_alerta_wifi.ino` | Recibe `/alerta_on` y `/alerta_off`; prende/apaga buzzer y motor |
+| `app/controllers.py` | Recibe `/api/deteccion`, valida el dispositivo y guarda en base de datos |
+| `app/models.py` | Define tablas como `Dispositivo`, `Deteccion`, `Usuario` y `EstadisticaSeguridad` |
+| `app/services.py` | Contiene la lógica que inserta la detección y actualiza estadísticas |
+
+###### Frase ideal para defender esta conexión
+
+> "El ESP32 se conecta con el resto del sistema a través de HTTP. El archivo `deteccion_tiempo_real.py` detecta la somnolencia con cámara e IA. Cuando confirma el evento, por un lado envía un `POST` a Flask en `/api/deteccion` para guardar la alerta en MySQL, y por otro lado envía un `GET` al ESP32 en `/alerta_on`. El ESP32 recibe esa ruta en su servidor interno y ejecuta `aplicarAlarma(true)`, activando el buzzer y el motor vibrador. Cuando la IA confirma recuperación, Python llama `/alerta_off` y el ESP32 apaga ambos actuadores."
+
+##### Frase ideal para defenderlo oralmente
+
+> "El ESP32 funciona como un servidor HTTP local. Al iniciar, se conecta al WiFi, configura el pin 22 para el buzzer y el pin 23 para el motor vibrador, y queda escuchando peticiones. Cuando la IA detecta somnolencia, primero registra la detección en el backend y luego llama a `/alerta_on` en el ESP32. Esa ruta ejecuta `aplicarAlarma(true)`, que pone ambos pines en `HIGH` y activa sonido y vibración. Cuando el conductor se recupera, se llama a `/alerta_off`, que pone ambos pines en `LOW` y apaga la alerta."
+
+---
+
 ## 3. ANÁLISIS ESTRUCTURAL DE LA BASE DE DATOS
 
 Nuestro proyecto utiliza una base de datos relacional robusta. A continuación se detallan las tablas y la forma en que se comunican.
@@ -301,7 +972,788 @@ erDiagram
 
 ---
 
-## 4. MENTORÍA Y POSIBLES PREGUNTAS DEL TRIBUNAL
+## 4. CÓMO TRAER DATOS DESDE LA BASE DE DATOS Y MOSTRARLOS EN LAS VISTAS
+
+como entiende flask que current_user pertenece a la tabla usuarios del modelo
+
+Flask lo entiende por la configuración de Flask-Login, no por magia directa de Flask.
+En app/__init__.py hay una función parecida a esta:
+@login_manager.user_loader
+def load_user(uid):
+    return Usuario.query.get(int(uid))
+Esa función le dice a Flask-Login:
+“Cuando tengas un ID de usuario guardado en la sesión, buscá ese ID en la tabla usuarios usando el modelo Usuario”.
+Y Flask-Login sabe que Usuario representa la tabla usuarios porque en app/models.py la clase está definida así:
+class Usuario(UserMixin, db.Model):
+    __tablename__ = 'usuarios'
+Entonces el flujo es:
+El usuario inicia sesión.
+En el login se ejecuta:
+login_user(u)
+donde u es un objeto de la clase Usuario.
+Flask-Login guarda en la sesión el id de ese usuario.
+En cada nueva request, Flask-Login lee ese ID.
+Llama automáticamente a load_user(uid).
+Esa función hace:
+Usuario.query.get(int(uid))
+Como Usuario.__tablename__ = 'usuarios', SQLAlchemy consulta la tabla usuarios.
+El resultado queda disponible como current_user.
+Por eso después podés hacer:
+{{ current_user.nombre }}
+{{ current_user.email }}
+porque current_user es, en realidad, una instancia del modelo Usuario.
+
+Esta parte es clave para el examen porque el tribunal puede pedir: "Si ya mostrás el nombre del usuario, ¿cómo mostrarías también el email?", o "¿Cómo traerías un dato que no está en la tabla `usuarios`?". En Flask con SQLAlchemy el flujo siempre es:
+
+1.  **Modelo:** La tabla está representada como una clase en [app/models.py](file:///c:/Users/juanc/vision/vision/app/models.py).
+2.  **Controlador:** La ruta consulta la base de datos en [app/controllers.py](file:///c:/Users/juanc/vision/vision/app/controllers.py).
+3.  **Template:** La vista HTML muestra el dato con Jinja usando `{{ ... }}` en [app/templates](file:///c:/Users/juanc/vision/vision/app/templates).
+
+### Forma 1: Usar `current_user` cuando el dato pertenece al usuario logueado
+
+`current_user` viene de **Flask-Login**. Cuando el usuario inicia sesión, Flask guarda su ID en la cookie de sesión. En cada request, la función `user_loader` de [app/__init__.py](file:///c:/Users/juanc/vision/vision/app/__init__.py#L76-L81) usa ese ID para buscar el objeto `Usuario` en la base de datos.
+
+Como `current_user` ya es un objeto de la clase `Usuario`, en el template se puede acceder directamente a sus columnas:
+
+```html
+<h1>Conductor: {{ current_user.nombre }} {{ current_user.apellido }}</h1>
+<p>Email: {{ current_user.email }}</p>
+<p>ID interno: #{{ current_user.id }}</p>
+<p>Fecha de registro: {{ current_user.fecha_registro.strftime('%d/%m/%Y') }}</p>
+```
+
+Esto ya se ve en [dashboard.html](file:///c:/Users/juanc/vision/vision/app/templates/dashboard.html), donde se muestra:
+
+```html
+{{ current_user.nombre }}
+{{ current_user.apellido }}
+{{ current_user.email }}
+{{ current_user.id }}
+```
+
+**Ejemplo de examen:** "La vista ya muestra el nombre del usuario y quiero agregar el email".
+
+Si ya existe esto:
+
+```html
+<h1>{{ current_user.nombre }}</h1>
+```
+
+Se agrega:
+
+```html
+<p>{{ current_user.email }}</p>
+```
+
+No hace falta modificar el controlador porque `current_user` ya trae todos los campos de la tabla `usuarios`: `id`, `nombre`, `apellido`, `email`, `password_hash` y `fecha_registro`. Lo único que no se debería mostrar nunca es `password_hash`, porque es información sensible.
+
+### Forma 2: Pasar una variable desde el controlador con `render_template`
+
+Cuando el dato no conviene tomarlo directamente con `current_user`, el controlador puede consultar la base de datos y mandarlo a la plantilla.
+
+Ejemplo real del dashboard en [app/controllers.py](file:///c:/Users/juanc/vision/vision/app/controllers.py#L300-L329):
+
+```python
+@bp.route('/dashboard')
+@login_required
+def dashboard():
+    stats = EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()
+
+    return render_template(
+        'dashboard.html',
+        stats=stats,
+    )
+```
+
+Después, en [dashboard.html](file:///c:/Users/juanc/vision/vision/app/templates/dashboard.html), se usa:
+
+```html
+{{ stats.total_eventos }}
+{{ stats.score_conduccion }}
+```
+
+Acá el dato **no está en la tabla `usuarios`**. Está en la tabla `estadisticas_seguridad`, pero se trae usando `usuario_id=current_user.id`, es decir, "dame las estadísticas que pertenecen al usuario que está logueado".
+
+**Explicación oral corta:**
+
+> "Si el dato pertenece al usuario logueado pero está en otra tabla, hago una consulta filtrando por `usuario_id=current_user.id`, guardo el resultado en una variable y se la paso al HTML con `render_template`."
+
+### Forma 3: Traer varios registros con `.all()`
+
+Cuando se necesita una lista completa de registros, se usa `.all()`.
+
+Ejemplo real del dashboard:
+
+```python
+detecciones = (
+    Deteccion.query
+    .filter_by(usuario_id=current_user.id)
+    .order_by(Deteccion.fecha_hora.desc())
+    .limit(20)
+    .all()
+)
+
+return render_template('dashboard.html', detecciones=detecciones)
+```
+
+Esto significa:
+
+1.  Buscar en la tabla `detecciones`.
+2.  Quedarse solo con las detecciones del usuario actual.
+3.  Ordenarlas desde la más nueva a la más vieja.
+4.  Limitar el resultado a las últimas 20.
+5.  Enviar la lista al template.
+
+En el HTML se recorre con un `for`:
+
+```html
+{% for det in detecciones %}
+    <p>{{ det.fecha_hora }}</p>
+    <p>{{ det.tipo_evento }}</p>
+    <p>{{ det.valor_ear }}</p>
+    <p>{{ det.valor_pitch }}</p>
+{% endfor %}
+```
+
+**Ejemplo de examen:** "Quiero mostrar en el dashboard el historial de alertas del conductor".  
+La respuesta es: consultar `Deteccion.query.filter_by(usuario_id=current_user.id).all()` y recorrerlo en el template con `{% for det in detecciones %}`.
+
+### Forma 4: Traer un solo registro con `.first()`
+
+Cuando esperamos un único resultado, se usa `.first()`.
+
+Ejemplo:
+
+```python
+stats = EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()
+```
+
+Esto devuelve una sola fila de la tabla `estadisticas_seguridad`. Si no existe, devuelve `None`. Por eso a veces conviene validar antes de mostrar:
+
+```html
+{% if stats %}
+    <p>Score: {{ stats.score_conduccion }}</p>
+{% else %}
+    <p>Score: 100</p>
+{% endif %}
+```
+
+En nuestro proyecto, antes de mostrar el dashboard se llama a `_init_stats(current_user.id)` para asegurarse de que el usuario tenga una fila de estadísticas creada.
+
+### Forma 5: Traer por ID con `.get_or_404()`
+
+Cuando la URL trae un ID, se puede buscar directamente por clave primaria.
+
+Ejemplo real en la ruta de edición de usuario:
+
+```python
+@bp.route('/usuarios/<int:user_id>/editar', methods=['GET', 'POST'])
+@login_required
+def editar_usuario(user_id):
+    usuario = Usuario.query.get_or_404(user_id)
+```
+
+Si existe un usuario con ese ID, lo carga. Si no existe, Flask responde con error 404.
+
+También se usa en los videos:
+
+```python
+det = Deteccion.query.get_or_404(det_id)
+```
+
+Después se valida seguridad:
+
+```python
+if det.usuario_id != current_user.id:
+    abort(403)
+```
+
+Esto evita que un usuario vea el video de detección de otro usuario cambiando el número en la URL.
+
+### Forma 6: Traer datos relacionados usando relaciones del modelo
+
+En [app/models.py](file:///c:/Users/juanc/vision/vision/app/models.py), la clase `Usuario` tiene relaciones:
+
+```python
+detecciones = db.relationship('Deteccion', backref='usuario', lazy=True)
+estadisticas = db.relationship('EstadisticaSeguridad', backref='usuario', uselist=False)
+dispositivos = db.relationship('Dispositivo', backref='usuario', lazy=True)
+roles = db.relationship('Rol', secondary=usuario_roles, backref=db.backref('usuarios', lazy='dynamic'))
+```
+
+Esto permite navegar entre tablas como si fueran objetos de Python.
+
+Ejemplos:
+
+```python
+usuario = Usuario.query.get(1)
+print(usuario.email)
+print(usuario.detecciones)
+print(usuario.estadisticas.score_conduccion)
+print(usuario.dispositivos)
+print(usuario.roles)
+```
+
+Y desde una detección se puede volver al usuario gracias al `backref='usuario'`:
+
+```python
+det = Deteccion.query.first()
+print(det.usuario.nombre)
+print(det.usuario.email)
+```
+
+**Ejemplo de examen:** "En el panel de administrador tengo una detección y quiero mostrar el nombre del usuario dueño de esa detección".
+
+En el template:
+
+```html
+{{ det.usuario.nombre }} {{ det.usuario.apellido }}
+{{ det.usuario.email }}
+```
+
+El dato `tipo_evento` sale de `detecciones`, pero `det.usuario.email` sale de `usuarios`. SQLAlchemy sabe unirlos porque `Deteccion.usuario_id` es clave foránea de `usuarios.id`.
+
+### Forma 7: Traer datos de otra tabla filtrando por `usuario_id`
+
+Esta es la forma más común cuando la tabla tiene una clave foránea al usuario.
+
+Ejemplo para traer dispositivos vinculados:
+
+```python
+dispositivos_vinculados = (
+    Dispositivo.query
+    .filter_by(usuario_id=current_user.id)
+    .order_by(Dispositivo.linked_at.desc())
+    .all()
+)
+
+return render_template(
+    'dashboard.html',
+    dispositivos=dispositivos_vinculados,
+)
+```
+
+En el template:
+
+```html
+{% for dispositivo in dispositivos %}
+    <p>{{ dispositivo.device_id }}</p>
+    <p>{{ dispositivo.ip_address }}</p>
+    <p>{{ dispositivo.firmware_version }}</p>
+    <p>{{ dispositivo.last_seen }}</p>
+{% endfor %}
+```
+
+**Ejemplo de examen:** "Quiero mostrar en el dashboard la IP del ESP32 del usuario".  
+Ese dato no está en `usuarios`, está en `dispositivos`. Se consulta:
+
+```python
+Dispositivo.query.filter_by(usuario_id=current_user.id).all()
+```
+
+Y luego en HTML:
+
+```html
+{{ dispositivo.ip_address }}
+```
+
+### Forma 8: Traer datos con filtros más específicos
+
+`filter_by` sirve para comparaciones simples por igualdad:
+
+```python
+Usuario.query.filter_by(email=email).first()
+Dispositivo.query.filter_by(device_id=device_id).first()
+Dispositivo.query.filter_by(usuario_id=current_user.id).all()
+```
+
+`filter` sirve para condiciones más complejas:
+
+```python
+Rol.query.filter(Rol.nombre.in_(roles_seleccionados)).all()
+```
+
+Ese ejemplo se usa cuando el administrador selecciona varios roles en el formulario. Como puede seleccionar más de uno, se usa `in_`, que significa "traeme los roles cuyo nombre esté dentro de esta lista".
+
+Otro ejemplo posible:
+
+```python
+online_limit = datetime.utcnow() - timedelta(minutes=10)
+dispositivos_online = (
+    Dispositivo.query
+    .filter(Dispositivo.usuario_id == current_user.id)
+    .filter(Dispositivo.last_seen >= online_limit)
+    .all()
+)
+```
+
+Esto traería solamente los dispositivos del usuario actual que se conectaron en los últimos 10 minutos.
+
+### Forma 9: Traer totales, promedios y datos calculados
+
+No siempre se trae una fila completa; a veces se necesita calcular un total o promedio.
+
+Ejemplo real del panel administrador:
+
+```python
+detecciones_por_usuario = dict(
+    db.session.query(Deteccion.usuario_id, db.func.count(Deteccion.id))
+    .group_by(Deteccion.usuario_id)
+    .all()
+)
+```
+
+Esto devuelve cuántas detecciones tiene cada usuario. Luego se arma un resumen:
+
+```python
+usuarios_resumen.append({
+    'usuario': usuario,
+    'roles': ', '.join(rol.nombre for rol in usuario.roles) or 'Sin rol',
+    'detecciones': detecciones_por_usuario.get(usuario.id, 0),
+    'score': stats_usuario.score_conduccion if stats_usuario else 100.0,
+})
+```
+
+También se calcula el promedio de score:
+
+```python
+score_promedio = (
+    db.session.query(db.func.avg(EstadisticaSeguridad.score_conduccion)).scalar()
+    or 100.0
+)
+```
+
+En el template:
+
+```html
+{{ total_usuarios }}
+{{ total_detecciones }}
+{{ score_promedio }}
+```
+
+**Explicación oral corta:**
+
+> "Para datos calculados uso `db.session.query` con funciones de SQLAlchemy como `count`, `avg` y `group_by`. Eso me permite obtener totales y promedios sin traer toda la tabla manualmente."
+
+### Forma 10: Traer datos uniendo tablas con `join`
+
+Aunque en el proyecto muchas veces se usan relaciones (`det.usuario.email`) o diccionarios de resumen, también se puede hacer un `join` explícito.
+
+Ejemplo: traer detecciones junto con el usuario dueño:
+
+```python
+resultados = (
+    db.session.query(Deteccion, Usuario)
+    .join(Usuario, Deteccion.usuario_id == Usuario.id)
+    .order_by(Deteccion.fecha_hora.desc())
+    .limit(20)
+    .all()
+)
+```
+
+En ese caso, cada resultado trae dos objetos: una detección y un usuario.
+
+```html
+{% for det, usuario in resultados %}
+    <p>{{ usuario.nombre }} {{ usuario.apellido }}</p>
+    <p>{{ usuario.email }}</p>
+    <p>{{ det.tipo_evento }}</p>
+    <p>{{ det.fecha_hora }}</p>
+{% endfor %}
+```
+
+Un `join` sirve cuando necesitás armar una consulta más compleja mezclando columnas de varias tablas. Para casos simples, es más fácil usar las relaciones del modelo.
+
+### Forma 11: Traer datos para una API y devolver JSON
+
+No todos los datos terminan en una plantilla HTML. Algunas rutas devuelven JSON para que las consuma JavaScript, el ESP32 o el script de detección.
+
+Ejemplo real:
+
+```python
+@bp.route('/api/devices/<device_id>/status')
+@login_required
+def api_device_status(device_id):
+    dispositivo = Dispositivo.query.filter_by(
+        device_id=_clean_device_id(device_id),
+        usuario_id=current_user.id,
+    ).first_or_404()
+
+    return jsonify({
+        'device_id': dispositivo.device_id,
+        'mac': dispositivo.mac,
+        'ip_address': dispositivo.ip_address,
+        'firmware_version': dispositivo.firmware_version,
+        'last_seen': dispositivo.last_seen.isoformat() if dispositivo.last_seen else None,
+    })
+```
+
+Acá se consulta la tabla `dispositivos`, se valida que el dispositivo pertenezca al usuario logueado y se responde con datos en formato JSON.
+
+### Forma 12: Insertar o actualizar datos antes de mostrarlos
+
+Traer datos no es lo único que se hace con la base de datos. También se insertan y actualizan filas.
+
+Para crear un usuario:
+
+```python
+u = Usuario(nombre=nombre, apellido=apellido, email=email)
+u.set_password(pw)
+db.session.add(u)
+db.session.commit()
+```
+
+Para actualizar un usuario:
+
+```python
+usuario.nombre = nombre
+usuario.apellido = apellido
+usuario.email = email
+db.session.commit()
+```
+
+Para vincular un dispositivo al usuario actual:
+
+```python
+dispositivo.usuario_id = current_user.id
+dispositivo.linked_at = datetime.utcnow()
+db.session.commit()
+```
+
+La idea importante es:
+
+*   `db.session.add(...)` prepara una fila nueva.
+*   Cambiar atributos como `usuario.email = email` modifica una fila existente.
+*   `db.session.commit()` confirma los cambios en MySQL.
+*   `db.session.rollback()` revierte cambios si ocurre un error.
+
+### Ejemplos concretos: qué escribir para traer cada dato
+
+Esta es una "chuleta" práctica para el examen. La idea es responder rápido: qué modelo se consulta, qué variable se manda al template y cómo se imprime en HTML.
+
+#### Tabla `usuarios`
+
+**Nombre, apellido, email, ID y fecha del usuario logueado:**
+
+```html
+{{ current_user.nombre }}
+{{ current_user.apellido }}
+{{ current_user.email }}
+#{{ current_user.id }}
+{{ current_user.fecha_registro.strftime('%d/%m/%Y') }}
+```
+
+**Un usuario específico por ID:**
+
+```python
+usuario = Usuario.query.get_or_404(user_id)
+return render_template('editar_usuario.html', usuario=usuario)
+```
+
+```html
+{{ usuario.nombre }}
+{{ usuario.apellido }}
+{{ usuario.email }}
+```
+
+**Un usuario por email, como en login:**
+
+```python
+user = Usuario.query.filter_by(email=email).first()
+```
+
+#### Tabla `estadisticas_seguridad`
+
+**Score, total de eventos y última actualización del usuario logueado:**
+
+```python
+stats = EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()
+return render_template('dashboard.html', stats=stats)
+```
+
+```html
+{{ stats.total_eventos if stats else 0 }}
+{{ "%.0f"|format(stats.score_conduccion if stats else 100.0) }}/100
+{{ stats.ultima_actualizacion if stats else 'Sin actualizar' }}
+```
+
+**El mismo score usando la relación del modelo:**
+
+```html
+{{ current_user.estadisticas.score_conduccion }}
+```
+
+#### Tabla `detecciones`
+
+**Últimas 20 detecciones del conductor actual:**
+
+```python
+detecciones = (
+    Deteccion.query
+    .filter_by(usuario_id=current_user.id)
+    .order_by(Deteccion.fecha_hora.desc())
+    .limit(20)
+    .all()
+)
+return render_template('dashboard.html', detecciones=detecciones)
+```
+
+```html
+{% for det in detecciones %}
+    {{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}
+    {{ det.tipo_evento }}
+    {{ det.valor_ear }}
+    {{ det.valor_pitch }}
+    {{ det.duracion_alerta }}
+    {{ det.video_path }}
+{% endfor %}
+```
+
+**Una detección por ID, validando que sea del usuario actual:**
+
+```python
+det = Deteccion.query.get_or_404(det_id)
+if det.usuario_id != current_user.id:
+    abort(403)
+```
+
+**Datos del usuario dueño de una detección:**
+
+```html
+{{ det.usuario.nombre }}
+{{ det.usuario.apellido }}
+{{ det.usuario.email }}
+```
+
+#### Tabla `dispositivos`
+
+**Todos los ESP32 vinculados al usuario actual:**
+
+```python
+dispositivos = (
+    Dispositivo.query
+    .filter_by(usuario_id=current_user.id)
+    .order_by(Dispositivo.linked_at.desc())
+    .all()
+)
+return render_template('dispositivos.html', dispositivos=dispositivos)
+```
+
+```html
+{% for dispositivo in dispositivos %}
+    {{ dispositivo.device_id }}
+    {{ dispositivo.mac }}
+    {{ dispositivo.ip_address }}
+    {{ dispositivo.firmware_version }}
+    {{ dispositivo.last_seen }}
+    {{ dispositivo.linked_at }}
+{% endfor %}
+```
+
+**Un dispositivo por `device_id`:**
+
+```python
+dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+```
+
+**Un dispositivo por `device_id`, asegurando que sea del usuario logueado:**
+
+```python
+dispositivo = Dispositivo.query.filter_by(
+    device_id=_clean_device_id(device_id),
+    usuario_id=current_user.id,
+).first_or_404()
+```
+
+**Solo dispositivos online en los últimos 10 minutos:**
+
+```python
+online_limit = datetime.utcnow() - timedelta(minutes=10)
+dispositivos_online = (
+    Dispositivo.query
+    .filter(Dispositivo.usuario_id == current_user.id)
+    .filter(Dispositivo.last_seen >= online_limit)
+    .all()
+)
+```
+
+#### Tabla `roles`
+
+**Roles del usuario actual:**
+
+```html
+{% for rol in current_user.roles %}
+    {{ rol.nombre }}
+{% endfor %}
+```
+
+**Verificar si es administrador:**
+
+```python
+current_user.has_role('Administrador')
+```
+
+```html
+{% if current_user.has_role('Administrador') %}
+    <a href="{{ url_for('main.admin_base_datos') }}">Panel admin</a>
+{% endif %}
+```
+
+**Todos los roles disponibles para un formulario:**
+
+```python
+roles_disponibles = Rol.query.order_by(Rol.nombre.asc()).all()
+```
+
+**Roles elegidos en un formulario:**
+
+```python
+roles_seleccionados = request.form.getlist('roles')
+selected_roles = Rol.query.filter(Rol.nombre.in_(roles_seleccionados)).all()
+```
+
+#### Tablas `dispositivo_eventos` y `dispositivo_comandos`
+
+**Eventos de un dispositivo:**
+
+```python
+eventos = (
+    DispositivoEvento.query
+    .filter_by(dispositivo_id=dispositivo.id)
+    .order_by(DispositivoEvento.created_at.desc())
+    .all()
+)
+```
+
+```html
+{% for evento in eventos %}
+    {{ evento.event_type }}
+    {{ evento.value }}
+    {{ evento.created_at }}
+{% endfor %}
+```
+
+**Comandos pendientes para un ESP32:**
+
+```python
+comandos = (
+    DispositivoComando.query
+    .filter_by(dispositivo_id=dispositivo.id, consumed=False)
+    .order_by(DispositivoComando.created_at.asc())
+    .limit(5)
+    .all()
+)
+payload = [cmd.command for cmd in comandos]
+```
+
+#### Ejemplos mezclando tablas
+
+**Últimas detecciones del sistema con nombre y email del usuario:**
+
+```python
+ultimas_detecciones = (
+    Deteccion.query
+    .order_by(Deteccion.fecha_hora.desc())
+    .limit(12)
+    .all()
+)
+return render_template('admin_base_datos.html', ultimas_detecciones=ultimas_detecciones)
+```
+
+```html
+{% for det in ultimas_detecciones %}
+    {{ det.id }}
+    {{ det.usuario.nombre }} {{ det.usuario.apellido }}
+    {{ det.usuario.email }}
+    {{ det.tipo_evento }}
+    {{ det.fecha_hora }}
+{% endfor %}
+```
+
+**Usuarios con roles, cantidad de detecciones y score:**
+
+```python
+usuarios = Usuario.query.order_by(Usuario.fecha_registro.desc()).all()
+detecciones_por_usuario = dict(
+    db.session.query(Deteccion.usuario_id, db.func.count(Deteccion.id))
+    .group_by(Deteccion.usuario_id)
+    .all()
+)
+estadisticas_por_usuario = {
+    stat.usuario_id: stat for stat in EstadisticaSeguridad.query.all()
+}
+
+usuarios_resumen = []
+for usuario in usuarios:
+    stats_usuario = estadisticas_por_usuario.get(usuario.id)
+    usuarios_resumen.append({
+        'usuario': usuario,
+        'roles': ', '.join(rol.nombre for rol in usuario.roles) or 'Sin rol',
+        'detecciones': detecciones_por_usuario.get(usuario.id, 0),
+        'score': stats_usuario.score_conduccion if stats_usuario else 100.0,
+    })
+```
+
+```html
+{% for row in usuarios_resumen %}
+    {% set usuario = row.usuario %}
+    {{ usuario.id }}
+    {{ usuario.nombre }} {{ usuario.apellido }}
+    {{ usuario.email }}
+    {{ row.roles }}
+    {{ row.detecciones }}
+    {{ row.score }}
+{% endfor %}
+```
+
+**El mismo caso con `join`, si el profesor pide unión explícita:**
+
+```python
+resultados = (
+    db.session.query(Deteccion, Usuario)
+    .join(Usuario, Deteccion.usuario_id == Usuario.id)
+    .order_by(Deteccion.fecha_hora.desc())
+    .all()
+)
+```
+
+```html
+{% for det, usuario in resultados %}
+    {{ usuario.nombre }}
+    {{ usuario.email }}
+    {{ det.tipo_evento }}
+{% endfor %}
+```
+
+#### Mini respuestas rápidas según lo que te pidan
+
+*   **Traer el email donde ya está el nombre:** `{{ current_user.email }}` si es el usuario logueado, o `{{ usuario.email }}` si el controlador mandó `usuario`.
+*   **Traer el score del conductor:** `EstadisticaSeguridad.query.filter_by(usuario_id=current_user.id).first()` y `{{ stats.score_conduccion }}`.
+*   **Traer detecciones del conductor:** `Deteccion.query.filter_by(usuario_id=current_user.id).all()` y `{% for det in detecciones %}`.
+*   **Traer la IP del ESP32:** `Dispositivo.query.filter_by(usuario_id=current_user.id).all()` y `{{ dispositivo.ip_address }}`.
+*   **Traer el nombre del usuario desde una detección:** `{{ det.usuario.nombre }}`.
+*   **Traer roles:** `current_user.roles` o `usuario.roles`.
+*   **Traer cantidad total de detecciones:** `db.func.count(Deteccion.id)`.
+*   **Traer promedio de score:** `db.func.avg(EstadisticaSeguridad.score_conduccion)`.
+
+### Resumen rápido para responder en el examen
+
+*   **Dato del usuario logueado:** uso `current_user.email`, `current_user.nombre`, `current_user.id`.
+*   **Dato de otra tabla del mismo usuario:** consulto con `filter_by(usuario_id=current_user.id)`.
+*   **Lista de datos:** uso `.all()` y en el HTML hago `{% for item in lista %}`.
+*   **Un solo dato:** uso `.first()` o `.get_or_404(id)`.
+*   **Dato relacionado:** uso relaciones como `det.usuario.email` o `usuario.dispositivos`.
+*   **Totales y promedios:** uso `db.session.query`, `db.func.count`, `db.func.avg` y `group_by`.
+*   **Datos para JavaScript o ESP32:** consulto la base y devuelvo `jsonify(...)`.
+*   **Para mostrarlo en una vista:** paso la variable con `render_template('vista.html', variable=valor)` y en el template la imprimo con `{{ variable.campo }}`.
+
+**Frase ideal para el oral:**
+
+> "En este proyecto los modelos de `app/models.py` representan las tablas. Desde el controlador hago consultas con SQLAlchemy, por ejemplo `Usuario.query`, `Deteccion.query` o `Dispositivo.query`. Si el dato es del usuario actual uso `current_user`; si está en otra tabla, filtro por `usuario_id=current_user.id` o uso las relaciones definidas en el modelo. Finalmente paso los datos al template con `render_template` y los muestro con Jinja usando `{{ }}`."
+
+---
+
+## 5. MENTORÍA Y POSIBLES PREGUNTAS DEL TRIBUNAL
 
 Aquí tienes una lista de 10 preguntas desafiantes que la profesora Yanil Berthalet o el tribunal evaluador podrían hacerte en la defensa, explicadas de forma sencilla y directa para que respondas con total seguridad.
 
@@ -344,6 +1796,288 @@ Aquí tienes una lista de 10 preguntas desafiantes que la profesora Yanil Bertha
 ### Pregunta 10: ¿Qué hicieron para asegurar la integridad de la base de datos si se elimina la cuenta de un conductor que tiene dispositivos asociados?
 *   **Respuesta sugerida:** 
     > "Para cuidar la integridad referencial, en el modelo de base de datos definimos comportamientos específicos ante borrados. En la tabla de `detecciones`, usamos la regla `ON DELETE CASCADE`. Si borramos un usuario de la base de datos, todas sus detecciones de fatiga asociadas se eliminan automáticamente para no ocupar espacio innecesario. Sin embargo, en la tabla de `dispositivos` usamos la regla `ON DELETE SET NULL`. De esta forma, si borramos al usuario conductor, el dispositivo físico ESP32 no se borra de la base de datos; simplemente su columna `usuario_id` pasa a ser `NULL` (Vacía). Así, el dispositivo físico queda liberado de fábrica para poder ser vinculado a un nuevo conductor."
+
+---
+
+## 6. CASO PRACTICO: AGREGAR UNA CARACTERISTICA DESDE MYSQL Y MOSTRARLA EN UNA VISTA
+
+### Situacion posible del examen
+
+Te pueden pedir algo como:
+
+> "Agregale a la tabla `usuarios` un numero de telefono y mostralo en el dashboard del usuario que esta actualmente en sesion."
+
+La forma mas facil, parecida a hacerlo manualmente desde MySQL, es:
+
+1. Agregar la columna `telefono` en la tabla `usuarios` desde MySQL o phpMyAdmin.
+2. Cargarle un numero de telefono a un usuario especifico desde MySQL.
+3. Agregar esa misma columna en el modelo `Usuario` dentro de `app/models.py`.
+4. Mostrar el dato en la vista con `{{ current_user.telefono }}`.
+5. Tocar `controllers.py` solamente si tambien queres cargar o modificar ese dato desde un formulario.
+
+### Si lo agrego directamente desde MySQL, funciona?
+
+Si, funcionaria, siempre que hagas estas dos cosas:
+
+1. Que la columna exista realmente en MySQL.
+2. Que la columna tambien este declarada en `app/models.py`.
+
+La base de datos y el modelo de Python tienen que coincidir. MySQL guarda la estructura real de la tabla, pero Flask trabaja con objetos de SQLAlchemy. En este proyecto, el objeto que representa a la tabla `usuarios` es la clase `Usuario` de `app/models.py`.
+
+Si agregas `telefono` solo en MySQL pero no en `models.py`, la base de datos va a tener la columna, pero Flask no la va a conocer como atributo del usuario. Por eso podria fallar algo como:
+
+```html
+{{ current_user.telefono }}
+```
+
+En cambio, si la columna existe en MySQL y tambien esta declarada en el modelo, Flask puede traer ese dato y Jinja puede mostrarlo en la vista.
+
+### Paso 1: agregar la columna desde MySQL o phpMyAdmin
+
+En MySQL, la columna se puede crear asi:
+
+```sql
+ALTER TABLE usuarios
+ADD COLUMN telefono VARCHAR(30) NULL;
+```
+
+Si lo haces desde phpMyAdmin:
+
+1. Entrar a la base de datos del proyecto.
+2. Abrir la tabla `usuarios`.
+3. Ir a **Estructura**.
+4. Elegir **Agregar columna**.
+5. Nombre: `telefono`.
+6. Tipo: `VARCHAR`.
+7. Longitud: `30`.
+8. Permitir `NULL`.
+9. Guardar.
+
+Se deja como `NULL` porque probablemente ya haya usuarios creados. Si la columna fuera obligatoria desde el principio, los usuarios viejos no tendrian telefono y eso podria generar problemas.
+
+### Paso 2: cargarle un telefono a un usuario especifico desde MySQL
+
+Una vez creada la columna, podes editar directamente una fila desde phpMyAdmin o usar SQL.
+
+Ejemplo:
+
+```sql
+UPDATE usuarios
+SET telefono = '3571123456'
+WHERE id = 1;
+```
+
+Ese ejemplo le carga el telefono `3571123456` al usuario cuyo `id` es `1`.
+
+Tambien podrias buscarlo por email:
+
+```sql
+UPDATE usuarios
+SET telefono = '3571123456'
+WHERE email = 'usuario@ejemplo.com';
+```
+
+Lo importante es cargar el dato en el mismo usuario con el que despues vas a iniciar sesion. Si inicias sesion con otro usuario, `current_user.telefono` va a mostrar el telefono de ese otro usuario, no el que editaste.
+
+### Paso 3: agregar la columna en `models.py`
+
+Abrir `app/models.py` y buscar:
+
+```python
+class Usuario(UserMixin, db.Model):
+    __tablename__ = 'usuarios'
+```
+
+Dentro de esa clase, agregar:
+
+```python
+telefono = db.Column(db.String(30), nullable=True)
+```
+
+Por ejemplo:
+
+```python
+class Usuario(UserMixin, db.Model):
+    __tablename__ = 'usuarios'
+
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(100), nullable=False)
+    apellido = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(150), unique=True, nullable=False)
+    telefono = db.Column(db.String(30), nullable=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    fecha_registro = db.Column(db.DateTime, default=datetime.utcnow)
+```
+
+Esta linea no crea necesariamente la columna en una tabla ya existente. Lo que hace es decirle a Flask/SQLAlchemy: "la tabla `usuarios` tambien tiene un campo llamado `telefono`".
+
+### Paso 4: mostrar el telefono en una vista
+
+Si el telefono es del usuario que inicio sesion, no hace falta hacer una consulta nueva en `controllers.py`. Flask-Login ya nos da `current_user`, que representa al usuario autenticado.
+
+En `app/templates/dashboard.html`, donde ya se muestran datos como nombre, apellido o correo, se puede agregar:
+
+```html
+<div class="account-field">
+    <label>Telefono</label>
+    <div class="val">{{ current_user.telefono }}</div>
+</div>
+```
+
+Mejor todavia:
+
+```html
+<div class="account-field">
+    <label>Telefono</label>
+    <div class="val">{{ current_user.telefono or 'Sin cargar' }}</div>
+</div>
+```
+
+La segunda version es mas prolija, porque si el usuario no tiene telefono cargado, en vez de quedar vacio aparece `Sin cargar`.
+
+### Necesito tocar `controllers.py`?
+
+Para solo mostrar el telefono del usuario actual, no necesariamente.
+
+No haria falta agregar una consulta como:
+
+```python
+usuario = Usuario.query.get(current_user.id)
+```
+
+porque `current_user` ya es el usuario actual. Si el modelo tiene `telefono`, entonces la vista puede usar directamente:
+
+```html
+{{ current_user.telefono }}
+```
+
+Si te piden que el usuario pueda cargar o modificar su telefono desde una vista, ahi si hay que tocar `controllers.py`.
+
+### Variante: tambien permitir editar el telefono desde la aplicacion
+
+Si no queres cargar el telefono desde MySQL cada vez, podes agregarlo a la vista de editar usuario.
+
+Archivos que se tocarian:
+
+* `app/templates/editar_usuario.html`
+* `app/controllers.py`
+
+En `app/templates/editar_usuario.html`, dentro del formulario:
+
+```html
+<div class="form-group">
+    <label for="telefono">Telefono</label>
+    <input
+        type="text"
+        id="telefono"
+        name="telefono"
+        value="{{ usuario.telefono or '' }}"
+    >
+</div>
+```
+
+En `app/controllers.py`, dentro de la ruta que procesa la edicion del usuario, se lee el campo:
+
+```python
+telefono = request.form.get('telefono', '').strip()
+```
+
+Y antes del `db.session.commit()` se guarda:
+
+```python
+usuario.telefono = telefono
+```
+
+Ejemplo de idea general:
+
+```python
+if request.method == 'POST':
+    usuario.nombre = request.form.get('nombre', '').strip()
+    usuario.apellido = request.form.get('apellido', '').strip()
+    usuario.telefono = request.form.get('telefono', '').strip()
+
+    db.session.commit()
+```
+
+La logica es: el formulario manda el dato, Flask lo recibe con `request.form`, se asigna al objeto `usuario`, y `db.session.commit()` lo guarda en MySQL.
+
+### Variante: pedir el telefono durante el registro
+
+Si te piden que el telefono se cargue cuando el usuario se registra, se toca:
+
+* `app/templates/register.html`
+* `app/controllers.py`, en la ruta `register`
+
+En el formulario de registro:
+
+```html
+<div class="form-group">
+    <label for="telefono">Telefono</label>
+    <input
+        type="text"
+        id="telefono"
+        name="telefono"
+        value="{{ form_data.telefono if form_data else '' }}"
+    >
+</div>
+```
+
+En `controllers.py`, dentro de `register`, donde se leen los otros campos:
+
+```python
+nombre = request.form.get('nombre', '').strip()
+apellido = request.form.get('apellido', '').strip()
+email = request.form.get('email', '').strip().lower()
+telefono = request.form.get('telefono', '').strip()
+pw = request.form.get('password', '')
+pw2 = request.form.get('confirm_password', '')
+```
+
+Y al crear el usuario:
+
+```python
+u = Usuario(
+    nombre=nombre,
+    apellido=apellido,
+    email=email,
+    telefono=telefono,
+)
+```
+
+Si hay errores de validacion, conviene devolver tambien el telefono en `form_data`, asi no se borra del formulario:
+
+```python
+return render_template(
+    'register.html',
+    form_data={
+        'nombre': nombre,
+        'apellido': apellido,
+        'email': email,
+        'telefono': telefono,
+    },
+)
+```
+
+### Checklist usando esta forma manual
+
+1. En MySQL/phpMyAdmin: crear la columna `telefono` en la tabla `usuarios`.
+2. En MySQL/phpMyAdmin: cargarle un telefono al usuario que vas a probar.
+3. En `app/models.py`: agregar `telefono = db.Column(db.String(30), nullable=True)` dentro de `Usuario`.
+4. En la vista, por ejemplo `dashboard.html`: agregar `{{ current_user.telefono or 'Sin cargar' }}`.
+5. Reiniciar la aplicacion Flask si estaba prendida.
+6. Iniciar sesion con el usuario al que le cargaste el telefono.
+7. Verificar que el telefono aparezca en la vista.
+
+### Errores comunes
+
+* Si aparece vacio, revisar que el telefono este cargado en el mismo usuario con el que iniciaste sesion.
+* Si aparece un error diciendo que `telefono` no existe, revisar que la columna este agregada tanto en MySQL como en `app/models.py`.
+* Si modificaste `models.py` con la aplicacion prendida, reiniciar Flask.
+* Si usaste `{{ usuario.telefono }}` pero en esa vista no existe una variable llamada `usuario`, usar `{{ current_user.telefono }}` si queres el usuario en sesion.
+
+### Respuesta corta para decir en el oral
+
+> "Si quiero hacerlo de forma simple, puedo agregar la columna `telefono` directamente en MySQL como `VARCHAR(30) NULL`, cargarle un numero a un usuario especifico y despues declarar esa misma columna en el modelo `Usuario` de `app/models.py` con `telefono = db.Column(db.String(30), nullable=True)`. Para mostrarlo en una vista uso `{{ current_user.telefono or 'Sin cargar' }}`, porque `current_user` es el usuario que inicio sesion. Solo necesito tocar `controllers.py` si quiero que el telefono se cargue o edite desde un formulario de la aplicacion."
 
 ---
 *Fin del Documento de Estudio Hito 2.*  
