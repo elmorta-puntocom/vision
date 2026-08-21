@@ -20,6 +20,7 @@ from flask import (
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_mail import Message
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+import mercadopago
 
 from . import bcrypt, db, logger, mail
 from .models import (
@@ -46,6 +47,14 @@ DEFAULT_ROLES = ('Administrador', DEFAULT_USER_ROLE)
 DEVICE_SIGNATURE_TTL_SECONDS = 300
 DEVICE_ONLINE_WINDOW_MINUTES = 10
 ALLOWED_DEVICE_COMMANDS = {'alert_on', 'alert_off'}
+
+# Producto único simulado para el checkout de Mercado Pago
+PRODUCTO_VISION = {
+    'title': 'Vision Device — Unidad Estándar',
+    'quantity': 1,
+    'unit_price': 189999.0,
+    'currency_id': 'ARS',
+}
 
 
 def valid_email(email):
@@ -175,6 +184,65 @@ def index():
 @bp.route('/comprar')
 def comprar():
     return render_template('comprar.html')
+
+
+@bp.route('/crear-preferencia', methods=['POST'])
+def crear_preferencia():
+    """Crea una preferencia de pago en Mercado Pago (checkout simulado)."""
+    access_token = current_app.config.get('MP_ACCESS_TOKEN')
+    if not access_token:
+        return jsonify({'status': 'error', 'message': 'MP_ACCESS_TOKEN no configurado'}), 500
+
+    sdk = mercadopago.SDK(access_token)
+
+    preference_data = {
+        'items': [PRODUCTO_VISION],
+        'back_urls': {
+            'success': url_for('main.pago_success', _external=True),
+            'failure': url_for('main.pago_failure', _external=True),
+            'pending': url_for('main.pago_pending', _external=True),
+        },
+        'auto_return': 'approved',
+        'statement_descriptor': 'VISION',
+    }
+
+    if current_user.is_authenticated:
+        preference_data['payer'] = {
+            'name': current_user.nombre,
+            'surname': current_user.apellido,
+            'email': current_user.email,
+        }
+        preference_data['external_reference'] = str(current_user.id)
+
+    try:
+        result = sdk.preference().create(preference_data)
+        preference = result['response']
+        return jsonify({
+            'status': 'ok',
+            'init_point': preference.get('init_point'),
+            'sandbox_init_point': preference.get('sandbox_init_point'),
+        })
+    except Exception as e:
+        logger.error(f'[MP] Error al crear preferencia: {e}')
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@bp.route('/pago/success')
+def pago_success():
+    flash('¡Pago aprobado! Gracias por tu compra.', 'success')
+    return redirect(url_for('main.dashboard' if current_user.is_authenticated else 'main.index'))
+
+
+@bp.route('/pago/failure')
+def pago_failure():
+    flash('El pago no pudo procesarse. Intentá nuevamente.', 'danger')
+    return redirect(url_for('main.comprar'))
+
+
+@bp.route('/pago/pending')
+def pago_pending():
+    flash('Tu pago está pendiente de acreditación.', 'warning')
+    return redirect(url_for('main.comprar'))
 
 
 @bp.route('/register', methods=['GET', 'POST'])
