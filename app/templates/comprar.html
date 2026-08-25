@@ -863,11 +863,75 @@
     </div>
 
 </div>
+
+<!-- MODAL MERCADO PAGO BRICKS -->
+<div id="mpModal" style="
+    display: none;
+    position: fixed;
+    left: 0; top: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.75);
+    z-index: 99999;
+    overflow-y: auto;
+    backdrop-filter: blur(4px);
+">
+    <div style="
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-top: 3px solid var(--accent);
+        border-radius: var(--radius);
+        width: 95%; max-width: 560px;
+        margin: 5vh auto;
+        box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+        position: relative;
+    ">
+        <!-- Header del modal -->
+        <div style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+        ">
+            <div style="font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--accent); font-weight: 700;">
+                // Checkout seguro — Mercado Pago
+            </div>
+            <button id="mpModalClose" onclick="cerrarModal()" style="
+                background: none;
+                border: none;
+                color: var(--text-muted);
+                font-size: 1.4rem;
+                cursor: pointer;
+                line-height: 1;
+                padding: 0.25rem;
+                transition: color 0.2s;
+            " title="Cerrar">✕</button>
+        </div>
+
+        <!-- Loading state -->
+        <div id="mpLoading" style="padding: 3rem 2rem; text-align: center;">
+            <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+                Conectando con Mercado Pago…
+            </div>
+            <div style="width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto;"></div>
+        </div>
+
+        <!-- Contenedor del Brick -->
+        <div id="paymentBrick_container" style="padding: 0 0.5rem 1rem;"></div>
+    </div>
+</div>
+
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
 {% endblock %}
 
 {% block extra_scripts %}
+<!-- SDK de Mercado Pago -->
+<script src="https://sdk.mercadopago.com/js/v2"></script>
+
 <script>
-    // FAQ accordion
+    // ── FAQ accordion ──────────────────────────────────────────────
     document.querySelectorAll('.faq-question').forEach(btn => {
         btn.addEventListener('click', () => {
             const item = btn.closest('.faq-item');
@@ -877,31 +941,119 @@
         });
     });
 
-    // Botón Mercado Pago — crea la preferencia y redirige al checkout
+    // ── Mercado Pago Checkout Bricks ───────────────────────────────
+    const MP_PUBLIC_KEY = "{{ config['MP_PUBLIC_KEY'] }}";
+    const URL_CREAR_PREFERENCIA = "{{ url_for('main.crear_preferencia') }}";
+    const URL_PROCESAR_PAGO     = "{{ url_for('main.procesar_pago') }}";
+
+    const mp = new MercadoPago(MP_PUBLIC_KEY, { locale: 'es-AR' });
+
+    function abrirModal() {
+        const modal = document.getElementById('mpModal');
+        // Asegurar que el modal esté en el root del DOM para evitar bugs de position:fixed
+        if (modal.parentNode !== document.body) {
+            document.body.appendChild(modal);
+        }
+        modal.style.display = 'block';
+        document.body.style.overflow = 'hidden';
+    }
+
+    function cerrarModal() {
+        const modal = document.getElementById('mpModal');
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
+        // Destruir el brick para que pueda recrearse al reabrir
+        if (window.paymentBrickController) {
+            window.paymentBrickController.unmount();
+            window.paymentBrickController = null;
+        }
+        document.getElementById('paymentBrick_container').innerHTML = '';
+        document.getElementById('mpLoading').style.display = 'block';
+    }
+
+    // Cerrar modal al hacer click en el fondo
+    document.getElementById('mpModal').addEventListener('click', function(e) {
+        if (e.target === this) cerrarModal();
+    });
+
+    // Cerrar con Escape
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') cerrarModal();
+    });
+
+    async function iniciarPago() {
+        abrirModal();
+
+        let preferenceId;
+        try {
+            const res  = await fetch(URL_CREAR_PREFERENCIA, { method: 'POST' });
+            const data = await res.json();
+            if (data.status !== 'ok') throw new Error(data.message || 'Error al crear preferencia');
+            preferenceId = data.preference_id;
+        } catch (err) {
+            cerrarModal();
+            alert('No se pudo conectar con Mercado Pago: ' + err.message);
+            return;
+        }
+
+        const bricksBuilder = mp.bricks();
+
+        const settings = {
+            initialization: {
+                amount: 189999,
+                preferenceId: preferenceId,
+            },
+            customization: {
+                paymentMethods: {
+                    ticket:      'all',
+                    creditCard:  'all',
+                    debitCard:   'all',
+                    mercadoPago: 'all',
+                },
+            },
+            callbacks: {
+                onReady: () => {
+                    // Ocultar loading cuando el Brick esté listo
+                    document.getElementById('mpLoading').style.display = 'none';
+                },
+                onSubmit: ({ selectedPaymentMethod, formData }) => {
+                    return new Promise((resolve, reject) => {
+                        fetch(URL_PROCESAR_PAGO, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(formData),
+                        })
+                        .then(r => r.json())
+                        .then(data => {
+                            resolve();
+                            if (data.status === 'ok' && data.redirect) {
+                                window.location.href = data.redirect;
+                            }
+                        })
+                        .catch(() => reject());
+                    });
+                },
+                onError: (error) => {
+                    console.error('[MP Brick error]', error);
+                },
+            },
+        };
+
+        try {
+            window.paymentBrickController = await bricksBuilder.create(
+                'payment',
+                'paymentBrick_container',
+                settings
+            );
+        } catch (err) {
+            cerrarModal();
+            alert('Error al cargar el formulario de pago: ' + err.message);
+        }
+    }
+
     document.getElementById('btnMercadoPago').addEventListener('click', function(e) {
         e.preventDefault();
-        const btn = this;
-        const originalHTML = btn.innerHTML;
-        btn.textContent = '⟳ Conectando con Mercado Pago...';
-        btn.style.opacity = '0.7';
-        btn.style.cursor = 'not-allowed';
-
-        fetch("{{ url_for('main.crear_preferencia') }}", { method: 'POST' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    // sandbox_init_point = checkout de prueba; init_point = producción
-                    window.location.href = data.sandbox_init_point || data.init_point;
-                } else {
-                    throw new Error(data.message || 'Error desconocido');
-                }
-            })
-            .catch(err => {
-                btn.innerHTML = originalHTML;
-                btn.style.opacity = '';
-                btn.style.cursor = '';
-                alert('No se pudo iniciar el pago: ' + err.message);
-            });
+        iniciarPago();
     });
 </script>
 {% endblock %}

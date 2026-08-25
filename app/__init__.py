@@ -46,6 +46,7 @@ def create_app():
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'vision-dev-key-change-in-prod')
     app.config['VISION_API_KEY'] = os.environ.get('VISION_API_KEY', 'vision-internal-key')
     app.config['MP_ACCESS_TOKEN'] = os.environ.get('MP_ACCESS_TOKEN', '')
+    app.config['MP_PUBLIC_KEY'] = os.environ.get('MP_PUBLIC_KEY', '')
     app.config['SQLALCHEMY_DATABASE_URI'] = mysql_uri
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {

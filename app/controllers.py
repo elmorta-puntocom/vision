@@ -188,7 +188,7 @@ def comprar():
 
 @bp.route('/crear-preferencia', methods=['POST'])
 def crear_preferencia():
-    """Crea una preferencia de pago en Mercado Pago (checkout simulado)."""
+    """Crea una preferencia de pago en Mercado Pago (Checkout Bricks)."""
     access_token = current_app.config.get('MP_ACCESS_TOKEN')
     if not access_token:
         return jsonify({'status': 'error', 'message': 'MP_ACCESS_TOKEN no configurado'}), 500
@@ -197,6 +197,7 @@ def crear_preferencia():
 
     preference_data = {
         'items': [PRODUCTO_VISION],
+        'purpose': 'wallet_purchase',
         'back_urls': {
             'success': url_for('main.pago_success', _external=True),
             'failure': url_for('main.pago_failure', _external=True),
@@ -219,11 +220,57 @@ def crear_preferencia():
         preference = result['response']
         return jsonify({
             'status': 'ok',
+            'preference_id': preference.get('id'),
             'init_point': preference.get('init_point'),
             'sandbox_init_point': preference.get('sandbox_init_point'),
         })
     except Exception as e:
         logger.error(f'[MP] Error al crear preferencia: {e}')
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@bp.route('/procesar-pago', methods=['POST'])
+def procesar_pago():
+    """Procesa el pago con los datos del formulario de Checkout Bricks."""
+    access_token = current_app.config.get('MP_ACCESS_TOKEN')
+    if not access_token:
+        return jsonify({'status': 'error', 'message': 'MP_ACCESS_TOKEN no configurado'}), 500
+
+    sdk = mercadopago.SDK(access_token)
+    data = request.get_json(silent=True) or {}
+
+    try:
+        payment_data = {
+            'transaction_amount': float(data.get('transaction_amount', 0)),
+            'token': data.get('token'),
+            'installments': int(data.get('installments', 1)),
+            'payment_method_id': data.get('payment_method_id'),
+            'issuer_id': data.get('issuer_id'),
+            'payer': data.get('payer', {}),
+        }
+
+        # Soporte para pagos con ticket/boleto (sin token de tarjeta)
+        if data.get('payment_method_id') and not payment_data['token']:
+            payment_data.pop('token')
+
+        result = sdk.payment().create(payment_data)
+        payment = result['response']
+        status = payment.get('status')
+        detail = payment.get('status_detail', '')
+
+        logger.info(f'[MP] Pago creado — status={status}, detail={detail}, id={payment.get("id")}')
+
+        if status == 'approved':
+            redirect_url = url_for('main.pago_success', _external=True)
+        elif status in ('in_process', 'pending', 'authorized'):
+            redirect_url = url_for('main.pago_pending', _external=True)
+        else:
+            redirect_url = url_for('main.pago_failure', _external=True)
+
+        return jsonify({'status': 'ok', 'payment_status': status, 'redirect': redirect_url})
+
+    except Exception as e:
+        logger.error(f'[MP] Error al procesar pago: {e}')
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
