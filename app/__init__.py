@@ -22,6 +22,22 @@ login_manager.login_message = 'Iniciá sesión para continuar.'
 login_manager.login_message_category = 'warning'
 
 
+def _load_env_file(env_path):
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding='utf-8-sig').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ[key] = value
+
+
 def _default_offline_sqlite_uri():
     project_root = Path(__file__).resolve().parent.parent
     legacy_db = project_root / 'vision_app' / 'vision_offline.db'
@@ -30,6 +46,14 @@ def _default_offline_sqlite_uri():
 
 
 def create_app():
+    project_root = Path(__file__).resolve().parent.parent
+    env_path = project_root / '.env'
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path, override=True)
+    except ImportError:
+        _load_env_file(env_path)
+
     app = Flask(__name__)
 
     mysql_user = os.environ.get('MYSQL_USER', 'root')

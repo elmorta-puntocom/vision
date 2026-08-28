@@ -951,7 +951,20 @@
     const URL_CREAR_PREFERENCIA = "{{ url_for('main.crear_preferencia') }}";
     const URL_PROCESAR_PAGO     = "{{ url_for('main.procesar_pago') }}";
 
-    const mp = new MercadoPago(MP_PUBLIC_KEY, { locale: 'es-AR' });
+    let mp = null;
+
+    function getMercadoPago() {
+        if (!MP_PUBLIC_KEY) {
+            throw new Error('Falta configurar MP_PUBLIC_KEY');
+        }
+        if (!window.MercadoPago) {
+            throw new Error('No se pudo cargar el SDK de Mercado Pago');
+        }
+        if (!mp) {
+            mp = new MercadoPago(MP_PUBLIC_KEY, { locale: 'es-AR' });
+        }
+        return mp;
+    }
 
     function abrirModal() {
         const modal = document.getElementById('mpModal');
@@ -990,18 +1003,41 @@
         abrirModal();
 
         let preferenceId;
+        let checkoutUrl;
         try {
             const res  = await fetch(URL_CREAR_PREFERENCIA, { method: 'POST' });
             const data = await res.json();
             if (data.status !== 'ok') throw new Error(data.message || 'Error al crear preferencia');
             preferenceId = data.preference_id;
+            checkoutUrl = data.sandbox_init_point || data.init_point;
         } catch (err) {
             cerrarModal();
             alert('No se pudo conectar con Mercado Pago: ' + err.message);
             return;
         }
 
-        const bricksBuilder = mp.bricks();
+        if (!preferenceId) {
+            cerrarModal();
+            if (checkoutUrl) {
+                window.location.href = checkoutUrl;
+                return;
+            }
+            alert('Mercado Pago no devolvio una preferencia valida.');
+            return;
+        }
+
+        let bricksBuilder;
+        try {
+            bricksBuilder = getMercadoPago().bricks();
+        } catch (err) {
+            cerrarModal();
+            if (checkoutUrl) {
+                window.location.href = checkoutUrl;
+                return;
+            }
+            alert('No se pudo abrir Mercado Pago: ' + err.message);
+            return;
+        }
 
         const settings = {
             initialization: {
@@ -1040,6 +1076,9 @@
                 },
                 onError: (error) => {
                     console.error('[MP Brick error]', error);
+                    if (checkoutUrl) {
+                        window.location.href = checkoutUrl;
+                    }
                 },
             },
         };
@@ -1052,6 +1091,10 @@
             );
         } catch (err) {
             cerrarModal();
+            if (checkoutUrl) {
+                window.location.href = checkoutUrl;
+                return;
+            }
             alert('Error al cargar el formulario de pago: ' + err.message);
         }
     }

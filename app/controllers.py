@@ -197,13 +197,11 @@ def crear_preferencia():
 
     preference_data = {
         'items': [PRODUCTO_VISION],
-        'purpose': 'wallet_purchase',
         'back_urls': {
             'success': url_for('main.pago_success', _external=True),
             'failure': url_for('main.pago_failure', _external=True),
             'pending': url_for('main.pago_pending', _external=True),
         },
-        'auto_return': 'approved',
         'statement_descriptor': 'VISION',
     }
 
@@ -217,10 +215,18 @@ def crear_preferencia():
 
     try:
         result = sdk.preference().create(preference_data)
-        preference = result['response']
+        preference = result.get('response', {})
+        status_code = int(result.get('status', 500))
+        preference_id = preference.get('id')
+
+        if status_code >= 400 or not preference_id:
+            message = preference.get('message') or preference.get('error') or 'Mercado Pago no devolvio preference_id'
+            logger.error(f'[MP] Preferencia invalida status={status_code}: {preference}')
+            return jsonify({'status': 'error', 'message': message}), 500
+
         return jsonify({
             'status': 'ok',
-            'preference_id': preference.get('id'),
+            'preference_id': preference_id,
             'init_point': preference.get('init_point'),
             'sandbox_init_point': preference.get('sandbox_init_point'),
         })
