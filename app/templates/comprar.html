@@ -868,10 +868,13 @@
 <div id="mpModal" style="
     display: none;
     position: fixed;
+    inset: 0;
     left: 0; top: 0; width: 100%; height: 100%;
     background: rgba(0,0,0,0.75);
+    z-index: 1000;
     z-index: 99999;
     overflow-y: auto;
+    padding: 2rem 1rem;
     backdrop-filter: blur(4px);
 ">
     <div style="
@@ -879,6 +882,8 @@
         border: 1px solid var(--border);
         border-top: 3px solid var(--accent);
         border-radius: var(--radius);
+        width: min(560px, 95vw);
+        margin: 2rem auto;
         width: 95%; max-width: 560px;
         margin: 5vh auto;
         box-shadow: 0 30px 80px rgba(0,0,0,0.6);
