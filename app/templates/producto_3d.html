@@ -1,0 +1,947 @@
+{% extends "base.html" %}
+
+{% block title %}Modelo 3D — VISION{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .section { padding: 6rem 5rem; }
+    .section-header { margin-bottom: 2.5rem; max-width: 780px; }
+    .section-title { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.025em; margin-top: 0.75rem; }
+    .section-lead { color: var(--text-mid); margin-top: 1rem; font-size: 0.98rem; }
+
+    /* ── Contenedor ───────────────────────────────────────── */
+    .viewer-shell {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+        overflow: hidden;
+    }
+
+    /* ── Barra de controles ───────────────────────────────── */
+    .viewer-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.85rem 1rem;
+        border-bottom: 1px solid var(--border);
+        background: rgba(8, 12, 16, 0.65);
+    }
+
+    .viewer-tab {
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        padding: 0.6rem 1.1rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: all 0.22s ease;
+        white-space: nowrap;
+    }
+    .viewer-tab:hover { color: var(--text); border-color: rgba(0, 229, 255, 0.45); }
+    .viewer-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .viewer-tab[aria-selected="true"] {
+        color: var(--bg);
+        background: var(--accent);
+        border-color: var(--accent);
+        font-weight: 700;
+        box-shadow: 0 0 18px rgba(0, 229, 255, 0.35);
+    }
+
+    .viewer-tools { margin-left: auto; display: flex; gap: 0.5rem; }
+
+    .viewer-icon-btn {
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        padding: 0.55rem 0.9rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: all 0.22s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .viewer-icon-btn:hover { color: var(--accent); border-color: rgba(0, 229, 255, 0.45); }
+    .viewer-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .viewer-icon-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+
+    /* ── Escenario 3D ─────────────────────────────────────── */
+    .viewer-stage {
+        position: relative;
+        background: radial-gradient(ellipse at 50% 42%, #101b24 0%, #080c10 72%);
+    }
+
+    model-viewer {
+        display: block;
+        width: 100%;
+        height: clamp(340px, 58vh, 620px);
+        --poster-color: transparent;
+        --progress-bar-color: var(--accent);
+        --progress-bar-height: 2px;
+        background-color: transparent;
+    }
+
+    .viewer-hint {
+        position: absolute;
+        left: 1rem;
+        bottom: 0.85rem;
+        font-family: var(--font-mono);
+        font-size: 0.63rem;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        pointer-events: none;
+        opacity: 0.75;
+    }
+
+    /* ── Loader ───────────────────────────────────────────── */
+    .mv-loader {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        background: rgba(8, 12, 16, 0.72);
+        backdrop-filter: blur(2px);
+        transition: opacity 0.4s ease;
+    }
+    .mv-loader[data-done="true"] { opacity: 0; pointer-events: none; }
+
+    .mv-spinner {
+        width: 44px;
+        height: 44px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: mvSpin 0.9s linear infinite;
+        box-shadow: 0 0 20px rgba(0, 229, 255, 0.18);
+    }
+    @keyframes mvSpin { to { transform: rotate(360deg); } }
+
+    .mv-loader-text {
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+    }
+    .mv-loader-track { width: min(240px, 60%); height: 2px; background: var(--border); overflow: hidden; }
+    .mv-loader-fill {
+        height: 100%;
+        width: 0%;
+        background: var(--accent);
+        box-shadow: 0 0 10px var(--accent);
+        transition: width 0.2s ease;
+    }
+
+    /* Respaldo si el visor no puede cargar */
+    .mv-fallback {
+        position: absolute;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.9rem;
+        text-align: center;
+        padding: 2rem;
+        background: rgba(8, 12, 16, 0.92);
+    }
+    .mv-fallback[data-show="true"] { display: flex; }
+    .mv-fallback img { max-width: min(560px, 88%); border: 1px solid var(--border); border-radius: var(--radius); }
+    .mv-fallback p {
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        color: var(--text-muted);
+        letter-spacing: 0.06em;
+    }
+
+    /* ── Pie descriptivo ──────────────────────────────────── */
+    .viewer-caption {
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 1.1rem 1.35rem;
+        border-top: 1px solid var(--border);
+        background: rgba(13, 19, 24, 0.6);
+    }
+    .viewer-caption-idx {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.1em;
+        padding-top: 0.15rem;
+    }
+    .viewer-caption-body h3 {
+        font-family: var(--font-sans);
+        font-size: 0.95rem;
+        font-weight: 700;
+        margin-bottom: 0.2rem;
+        letter-spacing: -0.01em;
+    }
+    .viewer-caption-body p { font-size: 0.85rem; color: var(--text-mid); line-height: 1.55; }
+
+    .viewer-specs {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 1px;
+        margin-top: 2rem;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+    }
+    .viewer-spec { background: var(--surface); padding: 1.1rem 1.25rem; }
+    .viewer-spec span {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.62rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 0.35rem;
+    }
+    .viewer-spec strong { font-family: var(--font-mono); font-size: 1rem; color: var(--accent); font-weight: 700; }
+
+    /* ── Marcadores sobre el modelo ───────────────────────── */
+    .hs {
+        --dot: 14px;
+        --arm: 26px;
+        width: var(--dot);
+        height: var(--dot);
+        padding: 0;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        background: rgba(8, 12, 16, 0.9);
+        cursor: pointer;
+        position: relative;
+        opacity: 0;
+        transform: scale(0.6);
+        transition: opacity 0.28s ease, transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.12), 0 0 14px rgba(0, 229, 255, 0.45);
+    }
+    .hs[data-visible], .hs.hs--ghost { opacity: 1; transform: scale(1); }
+    .hs:hover, .hs:focus-visible { background: var(--accent); outline: none; }
+    .hs:focus-visible { box-shadow: 0 0 0 4px rgba(0, 229, 255, 0.45); }
+    .hs[aria-pressed="true"] { background: var(--accent); box-shadow: 0 0 0 5px rgba(0, 229, 255, 0.28), 0 0 20px var(--accent); }
+
+    /* latido suave para que se lean como "tocables" */
+    .hs::before {
+        content: '';
+        position: absolute;
+        inset: -5px;
+        border-radius: 50%;
+        border: 1px solid rgba(0, 229, 255, 0.5);
+        animation: hsPulse 2.6s ease-out infinite;
+        pointer-events: none;
+    }
+    @keyframes hsPulse {
+        0%   { transform: scale(0.75); opacity: 0.85; }
+        70%  { transform: scale(1.65); opacity: 0; }
+        100% { transform: scale(1.65); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .hs::before { animation: none; opacity: 0.5; }
+    }
+
+    /* brazo + etiqueta */
+    .hs-label {
+        position: absolute;
+        font-family: var(--font-mono);
+        font-size: 0.6rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        color: var(--text);
+        background: rgba(8, 12, 16, 0.92);
+        border: 1px solid rgba(0, 229, 255, 0.35);
+        border-radius: var(--radius);
+        padding: 0.3rem 0.55rem;
+        pointer-events: none;
+        backdrop-filter: blur(6px);
+    }
+    .hs::after {
+        content: '';
+        position: absolute;
+        background: rgba(0, 229, 255, 0.55);
+        pointer-events: none;
+    }
+
+    .hs--r .hs-label { left: calc(100% + var(--arm)); top: 50%; transform: translateY(-50%); }
+    .hs--r::after     { left: 100%; top: 50%; width: var(--arm); height: 1px; }
+
+    .hs--l .hs-label { right: calc(100% + var(--arm)); top: 50%; transform: translateY(-50%); }
+    .hs--l::after     { right: 100%; top: 50%; width: var(--arm); height: 1px; }
+
+    .hs--t .hs-label { bottom: calc(100% + var(--arm)); left: 50%; transform: translateX(-50%); }
+    .hs--t::after     { bottom: 100%; left: 50%; width: 1px; height: var(--arm); }
+
+    .hs--b .hs-label { top: calc(100% + var(--arm)); left: 50%; transform: translateX(-50%); }
+    .hs--b::after     { top: 100%; left: 50%; width: 1px; height: var(--arm); }
+
+    .hs:hover .hs-label, .hs:focus-visible .hs-label, .hs[aria-pressed="true"] .hs-label {
+        border-color: var(--accent);
+        color: var(--accent);
+        box-shadow: 0 0 14px rgba(0, 229, 255, 0.25);
+    }
+
+    /* marcador que no pertenece a la vista activa */
+    .hs[data-off] { display: none !important; }
+
+    /* ── Panel de detalle ─────────────────────────────────── */
+    .hs-panel {
+        position: absolute;
+        top: 0.9rem;
+        right: 0.9rem;
+        width: min(330px, calc(100% - 1.8rem));
+        max-height: calc(100% - 1.8rem);
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+        padding: 1.15rem 1.25rem 1.25rem;
+        background: rgba(11, 17, 22, 0.94);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent);
+        border-radius: var(--radius);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+        animation: hsIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .hs-panel[hidden] { display: none; }
+    @keyframes hsIn { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+
+    .hs-panel-close {
+        position: absolute;
+        top: 0.55rem;
+        right: 0.6rem;
+        width: 26px;
+        height: 26px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 0.7rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .hs-panel-close:hover { color: var(--accent); border-color: var(--accent); }
+
+    .hs-panel-tag {
+        font-family: var(--font-mono);
+        font-size: 0.58rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--accent);
+        opacity: 0.85;
+    }
+    .hs-panel-title {
+        font-family: var(--font-sans);
+        font-size: 1.05rem;
+        font-weight: 800;
+        letter-spacing: -0.015em;
+        padding-right: 1.6rem;
+    }
+    .hs-panel-body { font-size: 0.84rem; color: var(--text-mid); line-height: 1.6; }
+
+    .hs-panel-specs { margin-top: 0.35rem; display: flex; flex-direction: column; gap: 0.4rem; }
+    .hs-panel-specs > div {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        font-family: var(--font-mono);
+        font-size: 0.66rem;
+        border-top: 1px solid var(--border);
+        padding-top: 0.4rem;
+    }
+    .hs-panel-specs dt { color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
+    .hs-panel-specs dd { color: var(--text); text-align: right; }
+
+    @media (max-width: 768px) {
+        .section { padding: 3.5rem 1.25rem; }
+        .section-title { font-size: 1.6rem; }
+        model-viewer { height: clamp(300px, 52vh, 420px); }
+        .viewer-tabs { padding: 0.7rem; gap: 0.4rem; }
+        .viewer-tab { flex: 1 1 auto; font-size: 0.64rem; padding: 0.55rem 0.5rem; text-align: center; }
+        .viewer-tools { margin-left: 0; width: 100%; }
+        .viewer-icon-btn { flex: 1 1 auto; justify-content: center; }
+        .viewer-hint { display: none; }
+
+        .hs { --arm: 15px; --dot: 13px; }
+        .hs-label { font-size: 0.54rem; padding: 0.24rem 0.42rem; letter-spacing: 0.05em; }
+
+        /* en telefono el panel entra como hoja inferior */
+        .hs-panel {
+            top: auto;
+            left: 0.6rem;
+            right: 0.6rem;
+            bottom: 0.6rem;
+            width: auto;
+            max-height: 64%;
+            border-left: 1px solid var(--border);
+            border-top: 3px solid var(--accent);
+            animation-name: hsInUp;
+        }
+        @keyframes hsInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="section">
+    <div class="section-header">
+        <span class="tag">Diseño industrial</span>
+        <h2 class="section-title">Explorá la carcasa del dispositivo en 3D</h2>
+        <p class="section-lead">
+            Maqueta técnica de la unidad VISION. Orbitá, acercá y desplazate con el mouse o el dedo,
+            o saltá entre las tres vistas predefinidas para ver el acabado externo y la distribución
+            interna de los componentes.
+        </p>
+    </div>
+
+    <div class="viewer-shell">
+        <div class="viewer-tabs" role="tablist" aria-label="Vistas del modelo 3D">
+            <button class="viewer-tab" type="button" role="tab" id="tab-general"
+                    data-view="general" aria-selected="true" aria-controls="mv">Vista general</button>
+            <button class="viewer-tab" type="button" role="tab" id="tab-cerrada"
+                    data-view="cerrada" aria-selected="false" aria-controls="mv">Caja cerrada</button>
+            <button class="viewer-tab" type="button" role="tab" id="tab-abierta"
+                    data-view="abierta" aria-selected="false" aria-controls="mv">Caja abierta</button>
+
+            <div class="viewer-tools">
+                <button class="viewer-icon-btn" type="button" id="mvSpin"
+                        aria-pressed="false" title="Rotación automática">↻ Girar</button>
+                <button class="viewer-icon-btn" type="button" id="mvReset"
+                        title="Volver a la vista general">⟲ Reset</button>
+            </div>
+        </div>
+
+        <div class="viewer-stage">
+            <model-viewer
+                id="mv"
+                src="{{ url_for('static', filename='models/vision_device.glb') }}"
+                poster="{{ url_for('static', filename='img/vision-device-3d-poster.jpg') }}"
+                alt="Modelo 3D de la carcasa del dispositivo VISION, con tapa abrible y componentes internos"
+                camera-controls
+                touch-action="pan-y"
+                interaction-prompt="auto"
+                interaction-prompt-threshold="2600"
+                environment-image="neutral"
+                exposure="1.15"
+                shadow-intensity="0.85"
+                shadow-softness="0.9"
+                interpolation-decay="140"
+                min-field-of-view="14deg"
+                max-field-of-view="45deg"
+                min-camera-orbit="auto 8deg 0.22m"
+                max-camera-orbit="auto 88deg 2.4m"
+                camera-orbit="38deg 68deg 1.216m"
+                camera-target="0.1m 0.1016m 0.0332m"
+                field-of-view="32deg">
+
+                <div class="mv-loader" slot="progress-bar" id="mvLoader">
+                    <div class="mv-spinner"></div>
+                    <div class="mv-loader-text">Cargando modelo 3D…</div>
+                    <div class="mv-loader-track"><div class="mv-loader-fill" id="mvFill"></div></div>
+                </div>
+
+                {# Posiciones medidas sobre el .blend, en metros y espacio glTF (Y-up).
+                   data-visibility-attribute="visible" hace que model-viewer togglee
+                   data-visible cuando el punto queda tapado por la geometria. #}
+
+                <button class="hs hs--t" slot="hotspot-g-caja" data-view="general" data-key="caja"
+                        data-position="0 0.0825 0" data-normal="0 1 0"
+                        data-visibility-attribute="visible" aria-label="Caja de control">
+                    <span class="hs-label">Caja de control</span></button>
+
+                <button class="hs hs--r" slot="hotspot-g-asiento" data-view="general" data-key="asiento"
+                        data-position="0.25 0.125 -0.012" data-normal="0 0 1"
+                        data-visibility-attribute="visible" aria-label="Asiento del conductor">
+                    <span class="hs-label">Asiento del conductor</span></button>
+
+                <button class="hs hs--t" slot="hotspot-g-webcam" data-view="general" data-key="webcam"
+                        data-position="0.25 0.1465 0.213" data-normal="0 1 0"
+                        data-visibility-attribute="visible" aria-label="Camara y tripode">
+                    <span class="hs-label">Cámara + trípode</span></button>
+
+                <button class="hs hs--t hs--ghost" slot="hotspot-g-eje" data-view="general" data-key="eje"
+                        data-position="0.25 0.154 0.088"
+                        aria-label="Eje de vision">
+                    <span class="hs-label">Eje de visión</span></button>
+
+                <button class="hs hs--t" slot="hotspot-c-logo" data-view="cerrada" data-key="logo"
+                        data-position="0 0.0825 -0.006" data-normal="0 1 0"
+                        data-visibility-attribute="visible" aria-label="Logo grabado en la tapa">
+                    <span class="hs-label">Logo grabado</span></button>
+
+                <button class="hs hs--t" slot="hotspot-c-alim" data-view="cerrada" data-key="alim"
+                        data-position="0.1035 0.042 0.035" data-normal="1 0 0"
+                        data-visibility-attribute="visible" aria-label="Pasacables de alimentacion">
+                    <span class="hs-label">Pasacables · alimentación</span></button>
+
+                <button class="hs hs--b" slot="hotspot-c-motor" data-view="cerrada" data-key="pasomotor"
+                        data-position="0.1035 0.042 -0.02" data-normal="1 0 0"
+                        data-visibility-attribute="visible" aria-label="Pasacables del motor">
+                    <span class="hs-label">Pasacables · motor</span></button>
+
+                <button class="hs hs--l" slot="hotspot-c-venteo" data-view="cerrada" data-key="venteo"
+                        data-position="-0.039 0.0295 0.0765" data-normal="0 0 1"
+                        data-visibility-attribute="visible" aria-label="Rejilla de ventilacion">
+                    <span class="hs-label">Ventilación</span></button>
+
+                <button class="hs hs--b" slot="hotspot-c-zocalo" data-view="cerrada" data-key="zocalo"
+                        data-position="0 0.005 0.066" data-normal="0 0 1"
+                        data-visibility-attribute="visible" aria-label="Zocalo luminoso">
+                    <span class="hs-label">Zócalo luminoso</span></button>
+
+                <button class="hs hs--t" slot="hotspot-a-proto" data-view="abierta" data-key="protoboard"
+                        data-position="0 0.027 -0.008" data-normal="0 1 0"
+                        data-visibility-attribute="visible" aria-label="Protoboard">
+                    <span class="hs-label">Protoboard</span></button>
+
+                <button class="hs hs--l" slot="hotspot-a-esp32" data-view="abierta" data-key="esp32"
+                        data-position="-0.022 0.0300 -0.020" data-normal="0 1 0"
+                        data-visibility-attribute="visible" aria-label="Microcontrolador ESP32">
+                    <span class="hs-label">ESP32</span></button>
+
+                <button class="hs hs--r" slot="hotspot-a-buzzer" data-view="abierta" data-key="buzzer"
+                        data-position="0.062 0.0245 0.046" data-normal="0 1 0"
+                        data-visibility-attribute="visible" aria-label="Buzzer">
+                    <span class="hs-label">Buzzer</span></button>
+
+                <button class="hs hs--r" slot="hotspot-a-cable" data-view="abierta" data-key="cableado"
+                        data-position="0.088 0.040 -0.020" data-normal="0 1 0"
+                        data-visibility-attribute="visible" aria-label="Ruteo de cables">
+                    <span class="hs-label">Ruteo de cables</span></button>
+
+                <button class="hs hs--t" slot="hotspot-a-tapa" data-view="abierta" data-key="tapa"
+                        data-position="0 0.140 -0.043" data-normal="0 -0.34 0.94"
+                        data-visibility-attribute="visible" aria-label="Tapa abatible">
+                    <span class="hs-label">Tapa abatible</span></button>
+            </model-viewer>
+
+            <aside class="hs-panel" id="hsPanel" aria-live="polite" hidden>
+                <button class="hs-panel-close" id="hsClose" type="button" aria-label="Cerrar detalle">✕</button>
+                <span class="hs-panel-tag" id="hsTag">Componente</span>
+                <h3 class="hs-panel-title" id="hsTitle"></h3>
+                <p class="hs-panel-body" id="hsBody"></p>
+                <dl class="hs-panel-specs" id="hsSpecs"></dl>
+            </aside>
+
+            <div class="mv-fallback" id="mvFallback">
+                <img src="{{ url_for('static', filename='img/vision-device-3d-poster.jpg') }}"
+                     alt="Render del dispositivo VISION">
+                <p>No se pudo cargar el visor 3D en este navegador. Arriba, el render de referencia.</p>
+            </div>
+
+            <div class="viewer-hint">Arrastrá para orbitar · Rueda o pellizco para zoom · Tocá un punto ◉ para ver el detalle</div>
+        </div>
+
+        <div class="viewer-caption">
+            <span class="viewer-caption-idx" id="mvIdx">01</span>
+            <div class="viewer-caption-body">
+                <h3 id="mvTitle">Vista general</h3>
+                <p id="mvDesc">
+                    Conjunto completo de la maqueta: la caja de control, el asiento con el motor
+                    vibrador en el respaldo y la cámara sobre su trípode, apuntando al puesto del conductor.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="viewer-specs">
+        <div class="viewer-spec"><span>Caja de control</span><strong>20,5 × 15,5 × 8,2 cm</strong></div>
+        <div class="viewer-spec"><span>Formato</span><strong>glTF binario (.glb)</strong></div>
+        <div class="viewer-spec"><span>Peso del modelo</span><strong>2,7 MB</strong></div>
+        <div class="viewer-spec"><span>Apertura de tapa</span><strong>Bisagra 70°</strong></div>
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module"
+        src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.0.0/dist/model-viewer.min.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    var mv       = document.getElementById('mv');
+    var loader   = document.getElementById('mvLoader');
+    var fill     = document.getElementById('mvFill');
+    var fallback = document.getElementById('mvFallback');
+    var idxEl    = document.getElementById('mvIdx');
+    var titleEl  = document.getElementById('mvTitle');
+    var descEl   = document.getElementById('mvDesc');
+    var spinBtn  = document.getElementById('mvSpin');
+    var resetBtn = document.getElementById('mvReset');
+    var tabs     = Array.prototype.slice.call(document.querySelectorAll('.viewer-tab'));
+
+    /* Cada vista guarda el AABB REAL de su sujeto (metros, espacio glTF Y-up,
+       medido sobre el .blend). El radio de orbita NO se hardcodea: se resuelve
+       en runtime contra el aspect real del contenedor, porque field-of-view es
+       el FOV vertical y en un telefono el visor queda apaisado hacia arriba,
+       lo que angosta el FOV horizontal y recortaria el modelo a los costados. */
+    var VIEWS = {
+        general: {
+            idx: '01', name: 'Vista general', lid: 0, theta: 38, phi: 68, fov: 32,
+            box: { min: [-0.2000, -0.0023, -0.1806], max: [0.4000, 0.2055, 0.2471] },
+            desc: 'Conjunto completo de la maqueta: la caja de control, el asiento con el motor ' +
+                  'vibrador en el respaldo y la camara sobre su tripode, apuntando al puesto del conductor.'
+        },
+        cerrada: {
+            idx: '02', name: 'Caja cerrada', lid: 0, theta: 42, phi: 64, fov: 30,
+            box: { min: [-0.1018, 0.0000, -0.0768], max: [0.1029, 0.0817, 0.0782] },
+            desc: 'Acabado externo en negro mate con lineas de circuito en #00E5FF, logo grabado en la tapa, ' +
+                  'rejilla de ventilacion y los dos pasacables del lateral derecho.'
+        },
+        abierta: {
+            idx: '03', name: 'Caja abierta', lid: 1, theta: 24, phi: 46, fov: 30,
+            // incluye la tapa levantada 70 grados: llega hasta Y = 0.2138
+            box: { min: [-0.1018, 0.0000, -0.0770], max: [0.1029, 0.2138, 0.0782] },
+            desc: 'Tapa abatida sobre su bisagra: quedan a la vista la protoboard sujeta con velcro, el ESP32, ' +
+                  'el buzzer y el ruteo del cableado hacia el motor vibrador del asiento.'
+        }
+    };
+
+    var FILL = 0.86;          // cuanto del cuadro ocupa el sujeto
+    var userMoved = false;    // si el usuario orbito a mano, no re-encuadramos solos
+
+    function dot(a, b)   { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+    function cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+    function unit(v)     { var l = Math.sqrt(dot(v, v)) || 1; return [v[0]/l, v[1]/l, v[2]/l]; }
+    function center(b)   { return [(b.min[0]+b.max[0])/2, (b.min[1]+b.max[1])/2, (b.min[2]+b.max[2])/2]; }
+
+    // Peor coordenada normalizada entre las 8 esquinas del AABB. >1 = recorta.
+    function maxNdc(t, thetaDeg, phiDeg, radius, fovDeg, aspect, b) {
+        var th = thetaDeg * Math.PI / 180, ph = phiDeg * Math.PI / 180;
+        var cam = [t[0] + radius * Math.sin(ph) * Math.sin(th),
+                   t[1] + radius * Math.cos(ph),
+                   t[2] + radius * Math.sin(ph) * Math.cos(th)];
+        var f  = unit([t[0]-cam[0], t[1]-cam[1], t[2]-cam[2]]);
+        var rt = unit(cross(f, [0, 1, 0]));
+        var up = cross(rt, f);
+        var tn = Math.tan(fovDeg * Math.PI / 360);
+        var m  = 0;
+
+        for (var i = 0; i < 8; i++) {
+            var p = [(i & 1) ? b.max[0] : b.min[0],
+                     (i & 2) ? b.max[1] : b.min[1],
+                     (i & 4) ? b.max[2] : b.min[2]];
+            var v = [p[0]-cam[0], p[1]-cam[1], p[2]-cam[2]];
+            var d = dot(v, f);
+            if (d <= 1e-6) { return 99; }
+            m = Math.max(m, Math.abs(dot(v, up) / (d * tn)),
+                            Math.abs(dot(v, rt) / (d * tn * aspect)));
+        }
+        return m;
+    }
+
+    function fitRadius(v, aspect) {
+        var t = center(v.box);
+        var r = Math.max(v.box.max[0] - v.box.min[0],
+                         v.box.max[1] - v.box.min[1],
+                         v.box.max[2] - v.box.min[2]) * 2;
+        for (var i = 0; i < 8; i++) {          // converge en 3-4 vueltas
+            r *= maxNdc(t, v.theta, v.phi, r, v.fov, aspect, v.box) / FILL;
+        }
+        return Math.max(0.24, Math.min(2.35, r));   // dentro de min/max-camera-orbit
+    }
+
+    function aspectNow() {
+        var r = mv.getBoundingClientRect();
+        return (r.width > 8 && r.height > 8) ? (r.width / r.height) : 1.8;
+    }
+
+    /* ── Apertura de tapa ──────────────────────────────────────────────
+       NO scrubear currentTime a mano: model-viewer arranca pausado, y
+       mientras el elemento este pausado su playAnimation() llama a
+       mixer.stopAllAction(), asi que no queda ninguna accion activa y
+       escribir currentTime no mueve nada (la tapa vuelve a la pose base,
+       o sea cerrada). La via correcta es play() en una sola pasada:
+       model-viewer fija clampWhenFinished = true, de modo que en LoopOnce
+       la accion QUEDA FIJA en el extremo en vez de rebobinar. Y admite
+       reversa con timeScale negativo, que es como la cerramos. */
+    var lidOpen = false, clipOk = false;
+    var LID_SPEED = 2.0;   // el clip dura ~2.4 s; a 2x abre en ~1.2 s
+
+    function setLid(open) {
+        var want = !!open;
+        if (!clipOk || want === lidOpen) { return; }
+        lidOpen = want;
+
+        mv.timeScale = want ? LID_SPEED : -LID_SPEED;
+
+        // Si ya quedo clampeada al final, rebobinamos antes de reabrir.
+        if (want && mv.duration && mv.currentTime >= mv.duration - 1e-3) {
+            mv.currentTime = 0;
+        }
+        mv.play({ repetitions: 1 });
+    }
+
+    var currentKey = 'general';
+
+    function applyView(key, keepLid) {
+        var v = VIEWS[key];
+        if (!v) { return; }
+        currentKey = key;
+        userMoved  = false;
+
+        var t = center(v.box);
+        var r = fitRadius(v, aspectNow());
+
+        mv.cameraTarget = t[0].toFixed(4) + 'm ' + t[1].toFixed(4) + 'm ' + t[2].toFixed(4) + 'm';
+        mv.cameraOrbit  = v.theta + 'deg ' + v.phi + 'deg ' + r.toFixed(3) + 'm';
+        mv.fieldOfView  = v.fov + 'deg';
+        if (!keepLid) { setLid(v.lid); }
+
+        idxEl.textContent   = v.idx;
+        titleEl.textContent = v.name;
+        descEl.textContent  = v.desc;
+
+        tabs.forEach(function (t2) {
+            t2.setAttribute('aria-selected', String(t2.dataset.view === key));
+        });
+
+        syncHotspots(key);
+        if (!keepLid) { closePanel(); }   // en resize conservamos el panel abierto
+    }
+
+    // Re-encuadrar al rotar el telefono o redimensionar, salvo que el usuario
+    // ya haya movido la camara a mano.
+    mv.addEventListener('camera-change', function (e) {
+        if (e.detail && e.detail.source === 'user-interaction') { userMoved = true; }
+    });
+
+    var resizeTimer = null;
+    window.addEventListener('resize', function () {
+        if (resizeTimer) { clearTimeout(resizeTimer); }
+        resizeTimer = setTimeout(function () {
+            if (!userMoved) { applyView(currentKey, true); }
+        }, 220);
+    });
+
+    /* ── Marcadores: contenido ───────────────────────────────────────── */
+    var INFO = {
+        caja: {
+            tag: 'Estructura', title: 'Caja de control',
+            body: 'El gabinete que aloja toda la electronica: protoboard, ESP32 y buzzer. Va en negro mate ' +
+                  'para no llamar la atencion dentro del habitaculo; las lineas de circuito y el zocalo en ' +
+                  'celeste son la unica senal de que esta encendido.',
+            specs: [['Medidas', '20,5 x 15,5 x 8,2 cm'], ['Material', 'Acrilico o MDF'], ['Acceso', 'Tapa abatible']]
+        },
+        asiento: {
+            tag: 'Maqueta', title: 'Asiento del conductor',
+            body: 'Reproduce a escala el puesto de manejo para poder demostrar el sistema fuera del auto. ' +
+                  'En el respaldo va embebido el motor vibrador: la alerta llega por la espalda, que es la ' +
+                  'via que un conductor adormecido no puede ignorar ni silenciar sin darse cuenta.',
+            specs: [['Reclinacion', '14 grados'], ['Alerta', 'Motor en el respaldo'], ['Regulacion', 'Rieles + palanca']]
+        },
+        webcam: {
+            tag: 'Captura', title: 'Camara + tripode',
+            body: 'La camara que mira al conductor. Se apoya sobre una zapata de liberacion rapida y queda ' +
+                  'sujeta por una horquilla con tornillo de mariposa, asi se corrige el encuadre segun la ' +
+                  'altura de cada conductor sin desarmar nada.',
+            specs: [['Montaje', 'Zapata QR + horquilla'], ['Ajuste', 'Rotula e inclinacion'], ['Salida', 'USB al equipo']]
+        },
+        eje: {
+            tag: 'Optica', title: 'Eje de vision',
+            body: 'La linea punteada marca hacia donde apunta el lente: el rostro del conductor, un poco por ' +
+                  'delante del apoyacabezas. Sobre ese cuadro corre el analisis de landmarks faciales que ' +
+                  'alimenta el modelo de somnolencia.',
+            specs: [['Distancia', '~21 cm en maqueta'], ['Objetivo', 'Rostro del conductor'], ['Landmarks', '468']]
+        },
+        logo: {
+            tag: 'Terminacion', title: 'Logo grabado',
+            body: 'El identificador VISION sobre la tapa, en #00E5FF sobre negro mate. En la maqueta fisica ' +
+                  'puede resolverse con grabado laser o vinilo de corte.',
+            specs: [['Color', '#00E5FF'], ['Tecnica', 'Grabado o vinilo']]
+        },
+        alim: {
+            tag: 'Pasacables', title: 'Paso de alimentacion',
+            body: 'Por aca entra la alimentacion del ESP32. El grommet de goma evita que el canto del acrilico ' +
+                  'corte el aislante del cable cada vez que la caja se abre y se cierra.',
+            specs: [['Diametro', '19 mm exterior'], ['Funcion', 'Alimentacion 5 V']]
+        },
+        pasomotor: {
+            tag: 'Pasacables', title: 'Paso hacia el motor',
+            body: 'El segundo paso de cable, separado 5,5 cm del de alimentacion para que los dos mazos no se ' +
+                  'crucen. Por aca sale el cable del motor vibrador, que despues corre por el canal del piso ' +
+                  'hasta el asiento.',
+            specs: [['Separacion', '5,5 cm'], ['Destino', 'Motor del asiento']]
+        },
+        venteo: {
+            tag: 'Termica', title: 'Ventilacion',
+            body: 'Ranuras en el panel frontal. El ESP32 trabaja en regimen continuo durante todo el viaje y ' +
+                  'la caja es chica y cerrada: sin salida de aire el calor se acumula.',
+            specs: [['Ubicacion', 'Panel frontal'], ['Ranuras', '6']]
+        },
+        zocalo: {
+            tag: 'Senalizacion', title: 'Zocalo luminoso',
+            body: 'Linea perimetral en la base. Es el indicador de estado mas simple del equipo: si esta ' +
+                  'encendida, el sistema esta alimentado y monitoreando.',
+            specs: [['Color', '#00E5FF'], ['Indica', 'Sistema activo']]
+        },
+        protoboard: {
+            tag: 'Interior', title: 'Protoboard',
+            body: 'El circuito completo montado sobre protoboard. Va sujeta con velcro y no con tornillos, a ' +
+                  'proposito: permite sacar todo el conjunto para modificarlo o repararlo sin desarmar la caja.',
+            specs: [['Medidas', '16,5 x 5,5 cm'], ['Sujecion', 'Velcro, 2 tiras'], ['Ventaja', 'Desmontable']]
+        },
+        esp32: {
+            tag: 'Interior', title: 'ESP32',
+            body: 'El microcontrolador. Recibe por WiFi el veredicto del modelo de deteccion que corre en el ' +
+                  'equipo y, cuando llega una alerta, dispara el buzzer y el motor vibrador.',
+            specs: [['Enlace', 'WiFi'], ['Salidas', 'Buzzer + motor'], ['Alimentacion', 'USB 5 V']]
+        },
+        buzzer: {
+            tag: 'Interior', title: 'Buzzer',
+            body: 'La alerta sonora, primer escalon del aviso. Suena antes que la vibracion: si el conductor ' +
+                  'reacciona ahi, la alerta haptica ni llega a activarse.',
+            specs: [['Rol', 'Alerta primaria'], ['Sujecion', 'Velcro']]
+        },
+        cableado: {
+            tag: 'Interior', title: 'Ruteo de cables',
+            body: 'Los mazos salen del ESP32 y se separan antes de llegar a la pared: dos cruzan los pasacables ' +
+                  'hacia afuera y el del buzzer queda adentro. El del motor sigue por el canal del piso hasta el asiento.',
+            specs: [['Mazos', '3'], ['Salidas', '2 pasacables']]
+        },
+        tapa: {
+            tag: 'Estructura', title: 'Tapa abatible',
+            body: 'Abre 70 grados sobre dos bisagras en el borde trasero y queda abierta sola, sin sostenerla. ' +
+                  'Esta pensada para poder meter y sacar la protoboard en medio de una demostracion.',
+            specs: [['Apertura', '70 grados'], ['Bisagras', '2'], ['Cierre', 'A presion']]
+        }
+    };
+
+    /* ── Marcadores: interaccion ─────────────────────────────────────── */
+    var spots   = Array.prototype.slice.call(document.querySelectorAll('.hs'));
+    var panel   = document.getElementById('hsPanel');
+    var pTag    = document.getElementById('hsTag');
+    var pTitle  = document.getElementById('hsTitle');
+    var pBody   = document.getElementById('hsBody');
+    var pSpecs  = document.getElementById('hsSpecs');
+    var closeBtn = document.getElementById('hsClose');
+
+    function closePanel() {
+        panel.hidden = true;
+        spots.forEach(function (s) { s.setAttribute('aria-pressed', 'false'); });
+    }
+
+    function openPanel(key, spot) {
+        var info = INFO[key];
+        if (!info) { return; }
+
+        pTag.textContent   = info.tag;
+        pTitle.textContent = info.title;
+        pBody.textContent  = info.body;
+
+        pSpecs.textContent = '';
+        (info.specs || []).forEach(function (row) {
+            var wrap = document.createElement('div');
+            var dt = document.createElement('dt'); dt.textContent = row[0];
+            var dd = document.createElement('dd'); dd.textContent = row[1];
+            wrap.appendChild(dt); wrap.appendChild(dd);
+            pSpecs.appendChild(wrap);
+        });
+
+        spots.forEach(function (s) { s.setAttribute('aria-pressed', String(s === spot)); });
+        panel.hidden = false;
+    }
+
+    // Solo se muestran los marcadores de la vista activa.
+    function syncHotspots(view) {
+        spots.forEach(function (s) {
+            if (s.dataset.view === view) { s.removeAttribute('data-off'); }
+            else { s.setAttribute('data-off', ''); }
+        });
+    }
+
+    spots.forEach(function (s) {
+        s.setAttribute('aria-pressed', 'false');
+        s.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (s.getAttribute('aria-pressed') === 'true') { closePanel(); }
+            else { openPanel(s.dataset.key, s); }
+        });
+    });
+
+    closeBtn.addEventListener('click', closePanel);
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !panel.hidden) { closePanel(); }
+    });
+
+    tabs.forEach(function (t) {
+        t.addEventListener('click', function () { applyView(t.dataset.view); });
+    });
+
+    // Flechas izquierda/derecha entre tabs
+    document.querySelector('.viewer-tabs').addEventListener('keydown', function (e) {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') { return; }
+        var i = tabs.indexOf(document.activeElement);
+        if (i === -1) { return; }
+        e.preventDefault();
+        var next = (i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length;
+        tabs[next].focus();
+        applyView(tabs[next].dataset.view);
+    });
+
+    resetBtn.addEventListener('click', function () {
+        mv.autoRotate = false;
+        spinBtn.setAttribute('aria-pressed', 'false');
+        applyView('general');
+    });
+
+    spinBtn.addEventListener('click', function () {
+        var on = spinBtn.getAttribute('aria-pressed') !== 'true';
+        spinBtn.setAttribute('aria-pressed', String(on));
+        mv.autoRotate = on;
+    });
+
+    /* ── Carga ── */
+    mv.addEventListener('progress', function (e) {
+        var p = Math.max(0, Math.min(1, e.detail.totalProgress));
+        fill.style.width = (p * 100).toFixed(1) + '%';
+        if (p >= 1) { loader.setAttribute('data-done', 'true'); }
+    });
+
+    mv.addEventListener('load', function () {
+        loader.setAttribute('data-done', 'true');
+        var clips = mv.availableAnimations || [];
+        clipOk = clips.indexOf('Abrir_Tapa') !== -1;
+        if (clipOk) {
+            // Solo seleccionamos el clip. La pose exportada ya tiene la tapa
+            // cerrada, asi que no hace falta pausar ni tocar currentTime.
+            mv.animationName = 'Abrir_Tapa';
+            mv.timeScale = LID_SPEED;
+        }
+        lidOpen = false;
+        applyView('general');
+    });
+
+    mv.addEventListener('error', function () {
+        loader.setAttribute('data-done', 'true');
+        fallback.setAttribute('data-show', 'true');
+    });
+
+    // Si el custom element nunca se registra (CDN bloqueado), mostramos el render.
+    setTimeout(function () {
+        if (!customElements.get('model-viewer')) {
+            loader.setAttribute('data-done', 'true');
+            fallback.setAttribute('data-show', 'true');
+        }
+    }, 9000);
+})();
+</script>
+{% endblock %}

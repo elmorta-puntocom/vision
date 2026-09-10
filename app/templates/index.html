@@ -551,6 +551,13 @@
         50% { transform: translate3d(10px, -8px, 0); opacity: 0.75; }
     }
 
+    .acquisition-actions {
+        display: flex;
+        gap: 0.85rem;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+    }
+
     .acquisition-strip {
         margin-top: 2rem;
         border: 1px solid var(--border);
@@ -776,6 +783,8 @@
         .product-showcase, .cta-section { grid-template-columns: 1fr; padding: 2rem; }
         .pipeline { grid-template-columns: 1fr; }
         .acquisition-strip { flex-direction: column; align-items: flex-start; }
+        .acquisition-actions { width: 100%; }
+        .acquisition-actions > a { flex: 1 1 auto; text-align: center; }
     }
 </style>
 {% endblock %}
@@ -902,7 +911,10 @@
         <p>
             Vision puede adquirirse como unidad individual, pack para múltiples conductores o solución de flota con soporte de implementación.
         </p>
-        <a href="{{ url_for('main.comprar') }}" class="btn-primary">Adquirir Vision</a>
+        <div class="acquisition-actions">
+            <a href="{{ url_for('main.producto_3d') }}" class="btn-ghost">Ver en 3D</a>
+            <a href="{{ url_for('main.comprar') }}" class="btn-primary">Adquirir Vision</a>
+        </div>
     </div>
 </section>
 

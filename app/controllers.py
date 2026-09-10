@@ -186,6 +186,11 @@ def comprar():
     return render_template('comprar.html')
 
 
+@bp.route('/producto-3d')
+def producto_3d():
+    return render_template('producto_3d.html')
+
+
 @bp.route('/crear-preferencia', methods=['POST'])
 def crear_preferencia():
     """Crea una preferencia de pago en Mercado Pago (Checkout Bricks)."""

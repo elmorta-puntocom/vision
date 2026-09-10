@@ -260,6 +260,7 @@
     <div class="nav-links">
         <a href="{{ url_for('main.comprar') }}" class="nav-link buy">Adquirir</a>
         <a href="{{ url_for('main.index') }}#producto" class="nav-link">Producto</a>
+        <a href="{{ url_for('main.producto_3d') }}" class="nav-link">Modelo 3D</a>
         <a href="{{ url_for('main.index') }}#tecnologia" class="nav-link">Tecnología</a>
         {% if current_user.is_authenticated %}
             <a href="{{ url_for('main.dashboard') }}" class="nav-link">Dashboard</a>
