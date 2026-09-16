@@ -1,12 +1,16 @@
 import hashlib
 import hmac
+import ipaddress
+import json
 import os
 import re
+import secrets
 import time
 from datetime import datetime, timedelta
 
 from flask import (
     Blueprint,
+    Response,
     abort,
     current_app,
     flash,
@@ -174,6 +178,24 @@ def _get_signed_device(data, include_mac=False):
         return None, error
 
     return dispositivo, ''
+
+
+def _hash_api_key(api_key):
+    return hashlib.sha256(api_key.encode('utf-8')).hexdigest()
+
+
+def _device_api_key_valida(dispositivo, api_key):
+    """Valida la api_key propia del dispositivo (la del config.json descargado)."""
+    if not dispositivo or not dispositivo.api_key_hash or not api_key:
+        return False
+    return hmac.compare_digest(dispositivo.api_key_hash, _hash_api_key(str(api_key)))
+
+
+def _ip_valida(value):
+    try:
+        return str(ipaddress.ip_address(str(value or '').strip()))
+    except ValueError:
+        return None
 
 
 @bp.route('/')
@@ -484,6 +506,8 @@ def dispositivos():
 
         dispositivo.usuario_id = current_user.id
         dispositivo.linked_at = datetime.utcnow()
+        # Un dueño nuevo invalida cualquier config.json generado antes.
+        dispositivo.api_key_hash = None
         db.session.commit()
         flash('Dispositivo vinculado correctamente.', 'success')
         return redirect(url_for('main.dispositivos'))
@@ -498,6 +522,47 @@ def dispositivos():
         'dispositivos.html',
         dispositivos=vinculados,
         now=datetime.utcnow,
+    )
+
+
+@bp.route('/dispositivos/<device_id>/configuracion', methods=['POST'])
+@login_required
+def descargar_configuracion(device_id):
+    """
+    Genera el config.json para deteccion_tiempo_real.py.
+    Es POST porque regenera la api_key: el config.json anterior deja de valer.
+    """
+    dispositivo = Dispositivo.query.filter_by(
+        device_id=_clean_device_id(device_id),
+        usuario_id=current_user.id,
+    ).first_or_404()
+
+    api_key = secrets.token_urlsafe(32)
+    dispositivo.api_key_hash = _hash_api_key(api_key)
+    db.session.add(DispositivoEvento(
+        dispositivo_id=dispositivo.id,
+        event_type='config_descargada',
+        value=f'usuario:{current_user.id}',
+    ))
+    db.session.commit()
+
+    server_url = (current_app.config.get('VISION_PUBLIC_URL') or request.url_root).rstrip('/')
+    contenido = json.dumps(
+        {
+            'device_id': dispositivo.device_id,
+            'api_key': api_key,
+            'server_url': server_url,
+        },
+        indent=2,
+    )
+
+    return Response(
+        contenido,
+        mimetype='application/json',
+        headers={
+            'Content-Disposition': 'attachment; filename=config.json',
+            'Cache-Control': 'no-store',
+        },
     )
 
 
@@ -656,7 +721,13 @@ def api_esp32_heartbeat():
         return jsonify({'status': 'error', 'message': error}), 403
 
     dispositivo.mac = str(data.get('mac', '')).strip().upper()
-    dispositivo.ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+    # Se prefiere la IP de LAN que informa el firmware: si Flask está fuera de la
+    # red local, remote_addr sería la IP pública del router y no serviría para
+    # que el script le hable al ESP32.
+    dispositivo.ip_address = (
+        _ip_valida(data.get('local_ip'))
+        or request.headers.get('X-Forwarded-For', request.remote_addr)
+    )
     dispositivo.firmware_version = str(data.get('firmware_version', '')).strip()[:32] or None
     dispositivo.last_nonce = str(data.get('nonce', '')).strip()
     dispositivo.last_seen = datetime.utcnow()
@@ -715,6 +786,27 @@ def api_device_status(device_id):
     })
 
 
+@bp.route('/api/devices/<device_id>/ip')
+def api_device_ip(device_id):
+    """
+    IP local del ESP32 según su último heartbeat. Lo usa deteccion_tiempo_real.py
+    como respaldo cuando mDNS falla. Requiere la api_key del dispositivo en el
+    header X-Vision-Api-Key (no en la URL, para que no quede en logs).
+    """
+    dispositivo = Dispositivo.query.filter_by(device_id=_clean_device_id(device_id)).first()
+
+    # Mismo 401 si el dispositivo no existe o la clave no coincide: no revela IDs válidos.
+    if not _device_api_key_valida(dispositivo, request.headers.get('X-Vision-Api-Key', '')):
+        return jsonify({'status': 'error', 'message': 'unauthorized'}), 401
+
+    return jsonify({
+        'status': 'ok',
+        'device_id': dispositivo.device_id,
+        'ip_address': dispositivo.ip_address,
+        'last_seen': dispositivo.last_seen.isoformat() if dispositivo.last_seen else None,
+    })
+
+
 @bp.route('/api/devices/<device_id>/command', methods=['POST'])
 @login_required
 def api_device_command(device_id):
@@ -745,8 +837,23 @@ def api_deteccion():
     """
     data = request.get_json(silent=True)
 
-    if not data or data.get('api_key') != current_app.config['VISION_API_KEY']:
+    if not data:
         abort(401)
+
+    # Se acepta la clave global del servidor (uso interno, como hasta ahora) o
+    # la api_key propia del dispositivo, que solo autoriza a ese device_id.
+    api_key = str(data.get('api_key') or '')
+    clave_global_ok = bool(api_key) and hmac.compare_digest(
+        api_key, current_app.config['VISION_API_KEY']
+    )
+    if not clave_global_ok:
+        device_id_auth = _clean_device_id(data.get('device_id'))
+        dispositivo_auth = (
+            Dispositivo.query.filter_by(device_id=device_id_auth).first()
+            if device_id_auth else None
+        )
+        if not _device_api_key_valida(dispositivo_auth, api_key):
+            abort(401)
 
     try:
         device_id = _clean_device_id(data.get('device_id'))

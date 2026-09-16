@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import socket
 import sys
 import tempfile
 import threading
@@ -67,14 +68,15 @@ EYE_CLOSED_SECONDS_THRESHOLD = 0.50
 EYE_PARTIAL_SECONDS_THRESHOLD = 1.20
 NORMAL_BLINK_MAX_SECONDS = 0.30
 
-# Cambia esta IP por la que imprime el ESP32 en el Monitor Serial.
-# Tambien puedes configurarla sin editar el archivo:
-#   PowerShell: $env:VISION_ESP32_IP="192.168.2.130"
-ESP32_IP = os.getenv("VISION_ESP32_IP", "192.168.2.168")
+# device_id, api_key y server_url se leen de config.json (se descarga desde
+# "Mis dispositivos" en la web y se guarda junto a este script).
+CONFIG_PATH = BASE_DIR / "config.json"
+
+# La IP del ESP32 no se configura: se busca por mDNS (vision-<device_id>.local)
+# y, si eso falla, se le pregunta a Flask la IP del último heartbeat.
 ESP32_TIMEOUT_SECONDS = 0.8
-VISION_SERVER_URL = os.getenv("VISION_SERVER_URL", "http://127.0.0.1:5050").rstrip("/")
-VISION_API_KEY = os.getenv("VISION_API_KEY", "vision-internal-key")
-VISION_DEVICE_ID = os.getenv("VISION_DEVICE_ID", "ESP32-657593")
+ESP32_MDNS_TIMEOUT_SECONDS = 2.0
+ESP32_BACKEND_TIMEOUT_SECONDS = 3.0
 DETECTION_REPORT_COOLDOWN_SECONDS = 20.0
 
 BLACKBOX_PRE_EVENT_SECONDS = 10.0
@@ -90,41 +92,174 @@ from model.biometrics import calculate_eye_aspect_ratio, estimate_head_pitch # n
 from model.data_collection import normalize_landmarks # noqa: E402
 
 
-def _enviar_peticion_esp32(ruta):
-    url = f"http://{ESP32_IP}{ruta}"
+@dataclass
+class VisionConfig:
+    device_id: str
+    api_key: str
+    server_url: str
+
+
+def cargar_configuracion(path=CONFIG_PATH):
+    """Lee config.json (descargado desde "Mis dispositivos") junto al script."""
+    path = Path(path)
+    if not path.exists():
+        raise RuntimeError(
+            f"No se encontro {path.name} en {path.parent}. Descargalo desde la web "
+            "(Mis dispositivos > Descargar configuracion) y guardalo en esa carpeta."
+        )
 
     try:
-        respuesta = requests.get(url, timeout=ESP32_TIMEOUT_SECONDS)
-        respuesta.raise_for_status()
-        print(f"[ESP32] OK {ruta}: {respuesta.text}")
-        return True
-    except requests.exceptions.ConnectionError:
-        print(f"[ESP32] No se pudo conectar con {url}")
-    except requests.exceptions.Timeout:
-        print(f"[ESP32] Timeout al conectar con {url}")
-    except requests.exceptions.RequestException as exc:
-        print(f"[ESP32] Error HTTP en {url}: {exc}")
+        # utf-8-sig tolera el BOM que agregan algunos editores de Windows.
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"{path.name} no es un JSON valido: {exc}") from exc
+
+    faltantes = [
+        clave for clave in ("device_id", "api_key", "server_url")
+        if not isinstance(data.get(clave), str) or not data[clave].strip()
+    ]
+    if faltantes:
+        raise RuntimeError(
+            f"{path.name} incompleto, faltan: {', '.join(faltantes)}. "
+            "Volve a descargarlo desde la web."
+        )
+
+    config = VisionConfig(
+        device_id=data["device_id"].strip().upper(),
+        api_key=data["api_key"].strip(),
+        server_url=data["server_url"].strip().rstrip("/"),
+    )
+    print(f"[CONFIG] dispositivo={config.device_id} servidor={config.server_url}")
+    return config
+
+
+def nombre_mdns(device_id):
+    """Debe coincidir con nombreMdns() del firmware: vision-<device_id> en minusculas."""
+    slug = "".join(ch if ch.isalnum() else "-" for ch in device_id.lower())
+    return f"vision-{slug}.local"
+
+
+class Esp32Localizador:
+    """Averigua la IP actual del ESP32: primero mDNS y, si falla, pregunta a Flask."""
+
+    def __init__(self, config):
+        self.config = config
+        self.hostname = nombre_mdns(config.device_id)
+        self.ip = None
+
+    def obtener_ip(self, forzar=False):
+        if self.ip and not forzar:
+            return self.ip
+        self.ip = self._resolver_por_mdns() or self._resolver_por_backend()
+        return self.ip
+
+    def invalidar(self):
+        self.ip = None
+
+    def _resolver_por_mdns(self):
+        # getaddrinfo no tiene timeout propio y en Windows puede tardar varios
+        # segundos si el nombre no existe: se corre en un hilo con limite.
+        resultado = {}
+
+        def resolver():
+            try:
+                info = socket.getaddrinfo(self.hostname, 80, socket.AF_INET, socket.SOCK_STREAM)
+                resultado["ip"] = info[0][4][0]
+            except OSError as exc:
+                resultado["error"] = exc
+
+        hilo = threading.Thread(target=resolver, daemon=True, name="Esp32Mdns")
+        hilo.start()
+        hilo.join(ESP32_MDNS_TIMEOUT_SECONDS)
+
+        ip = resultado.get("ip")
+        if ip:
+            print(f"[ESP32] {self.hostname} resuelto por mDNS: {ip}")
+            return ip
+
+        motivo = resultado.get("error") or "timeout"
+        print(f"[ESP32] mDNS no resolvio {self.hostname} ({motivo}); consultando al servidor.")
+        return None
+
+    def _resolver_por_backend(self):
+        url = f"{self.config.server_url}/api/devices/{self.config.device_id}/ip"
+        try:
+            respuesta = requests.get(
+                url,
+                headers={"X-Vision-Api-Key": self.config.api_key},
+                timeout=ESP32_BACKEND_TIMEOUT_SECONDS,
+            )
+            if respuesta.status_code == 401:
+                print("[ESP32] El servidor rechazo la api_key: volve a descargar config.json.")
+                return None
+            respuesta.raise_for_status()
+            data = respuesta.json()
+        except requests.exceptions.RequestException as exc:
+            print(f"[ESP32] No se pudo consultar la IP al servidor: {exc}")
+            return None
+        except ValueError:
+            print("[ESP32] Respuesta no JSON al consultar la IP del ESP32.")
+            return None
+
+        ip = data.get("ip_address")
+        if not ip:
+            print("[ESP32] El servidor todavia no tiene IP registrada (sin heartbeat).")
+            return None
+
+        print(f"[ESP32] IP obtenida del servidor: {ip} (ultimo heartbeat: {data.get('last_seen')})")
+        return ip
+
+
+def _enviar_peticion_esp32(localizador, ruta):
+    ip_anterior = None
+    # Segundo intento solo si la IP cambio (p. ej. el router le dio otra por DHCP).
+    for intento in range(2):
+        ip = localizador.obtener_ip(forzar=intento > 0)
+        if not ip:
+            print(f"[ESP32] No se encontro el ESP32 en la red; no se envio {ruta}")
+            return False
+        if ip == ip_anterior:
+            return False
+        ip_anterior = ip
+
+        url = f"http://{ip}{ruta}"
+        try:
+            respuesta = requests.get(url, timeout=ESP32_TIMEOUT_SECONDS)
+            respuesta.raise_for_status()
+            print(f"[ESP32] OK {ruta}: {respuesta.text}")
+            return True
+        except requests.exceptions.ConnectionError:
+            print(f"[ESP32] No se pudo conectar con {url}")
+            localizador.invalidar()
+        except requests.exceptions.Timeout:
+            print(f"[ESP32] Timeout al conectar con {url}")
+            localizador.invalidar()
+        except requests.exceptions.RequestException as exc:
+            print(f"[ESP32] Error HTTP en {url}: {exc}")
+            return False
 
     return False
 
 
-def enviar_alerta_on():
+def enviar_alerta_on(localizador):
     """Activa motor vibrador y buzzer en el ESP32."""
-    return _enviar_peticion_esp32("/alerta_on")
+    return _enviar_peticion_esp32(localizador, "/alerta_on")
 
 
-def enviar_alerta_off():
+def enviar_alerta_off(localizador):
     """Apaga motor vibrador y buzzer en el ESP32."""
-    return _enviar_peticion_esp32("/alerta_off")
+    return _enviar_peticion_esp32(localizador, "/alerta_off")
 
 
 class Esp32AlarmController:
     """Envia ordenes al ESP32 solo cuando cambia el estado de somnolencia."""
 
-    def __init__(self):
+    def __init__(self, config):
         self.alarma_activada = False
+        self.localizador = Esp32Localizador(config)
         self._executor = ThreadPoolExecutor(max_workers=1)
-        self._executor.submit(enviar_alerta_off)
+        # La primera orden tambien resuelve la IP, en segundo plano.
+        self._executor.submit(enviar_alerta_off, self.localizador)
 
     def update(self, somnolencia_detectada):
         if somnolencia_detectada == self.alarma_activada:
@@ -132,12 +267,12 @@ class Esp32AlarmController:
 
         self.alarma_activada = somnolencia_detectada
         accion = enviar_alerta_on if somnolencia_detectada else enviar_alerta_off
-        self._executor.submit(accion)
+        self._executor.submit(accion, self.localizador)
 
     def apagar_y_cerrar(self):
         self._executor.shutdown(wait=True, cancel_futures=False)
         if self.alarma_activada:
-            enviar_alerta_off()
+            enviar_alerta_off(self.localizador)
             self.alarma_activada = False
 
 
@@ -172,7 +307,8 @@ class RecordedDrowsinessEvent:
 class DetectionReporter:
     """Registra en el backend un evento por episodio de somnolencia."""
 
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._active_reported = False
         self._last_report_at = 0.0
@@ -227,8 +363,8 @@ class DetectionReporter:
 
     def _send(self, event):
         payload = {
-            "api_key": VISION_API_KEY,
-            "device_id": VISION_DEVICE_ID,
+            "api_key": self.config.api_key,
+            "device_id": self.config.device_id,
             "tipo_evento": event.tipo_evento,
             "video_path": event.video_path,
             "valor_ear": event.valor_ear,
@@ -239,7 +375,7 @@ class DetectionReporter:
             "duracion_video": event.video_seconds,
         }
 
-        url = f"{VISION_SERVER_URL}/api/deteccion"
+        url = f"{self.config.server_url}/api/deteccion"
         try:
             response = requests.post(url, json=payload, timeout=3.0)
             response.raise_for_status()
@@ -664,7 +800,10 @@ class BlackBoxRecorder:
 
     def _make_output_path(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        device_id = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in VISION_DEVICE_ID)
+        device_id = "".join(
+            ch if ch.isalnum() or ch in ("-", "_") else "_"
+            for ch in self.reporter.config.device_id
+        )
         return self.output_dir / f"somnolencia_{device_id}_{timestamp}.mp4"
 
     def _build_recorded_event(self, video_path, video_seconds=0.0):
@@ -1583,13 +1722,15 @@ def open_camera(camera_index=0):
 
 
 def run_realtime_detection():
+    # Primero la configuracion: si falta config.json se avisa antes de cargar el modelo.
+    config = cargar_configuracion()
     model, scaler, expected_features, interpreter = load_runtime_assets()
     cap = open_camera(0)
     smoother = PredictionSmoother()
     eye_tracker = EyeClosureTracker()
     head_tracker = HeadNodTracker()
-    alarm_controller = Esp32AlarmController()
-    detection_reporter = DetectionReporter()
+    alarm_controller = Esp32AlarmController(config)
+    detection_reporter = DetectionReporter(config)
     blackbox_recorder = BlackBoxRecorder(detection_reporter)
     recording_fps = cap.get(cv2.CAP_PROP_FPS) or DEFAULT_RECORDING_FPS
     if recording_fps <= 1.0 or recording_fps > 120.0:

@@ -119,6 +119,8 @@ cd C:\Users\juanc\vision\vision
 python deteccion_tiempo_real.py
 
 
+# El script ya no usa variables de entorno ni la IP del ESP32:
+# descargá config.json desde "Mis dispositivos" > "Descargar configuración",
+# guardalo junto a deteccion_tiempo_real.py y ejecutalo normalmente.
 cd C:\Users\juanc\vision\vision
-$env:VISION_DEVICE_ID="ESP32-PRUEBA"
 python deteccion_tiempo_real.py

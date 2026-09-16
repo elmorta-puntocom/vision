@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app import bcrypt, create_app, db  # noqa: E402
-from app.models import Dispositivo  # noqa: E402
+from app.models import Dispositivo, asegurar_columnas_dispositivos  # noqa: E402
 
 
 def build_parser():
@@ -27,6 +27,7 @@ def main():
     app = create_app()
     with app.app_context():
         db.create_all()
+        asegurar_columnas_dispositivos()
 
         if Dispositivo.query.filter_by(device_id=device_id).first():
             raise SystemExit(f'Ya existe el dispositivo {device_id}')
@@ -43,7 +44,10 @@ def main():
     print(f'DEVICE_ID={device_id}')
     print(f'DEVICE_SECRET={device_secret}')
     print(f'ACTIVATION_CODE={activation_code}')
-    print('Graba DEVICE_ID y DEVICE_SECRET en el ESP32. Entrega ACTIVATION_CODE al usuario.')
+    print(
+        'Graba DEVICE_ID y DEVICE_SECRET en esp32_alerta_wifi/config_dispositivo.h. '
+        'Entrega ACTIVATION_CODE al usuario.'
+    )
 
 
 if __name__ == '__main__':

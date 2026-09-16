@@ -7,3 +7,6 @@ __pycache__/
 *.pyc.*
 drowsy_cnn_model.keras
 iniciar_vision.bat
+# Configuración local con secretos (no subir)
+config.json
+esp32_alerta_wifi/config_dispositivo.h

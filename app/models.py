@@ -127,6 +127,25 @@ class Dispositivo(db.Model):
     last_seen = db.Column(db.DateTime)
     linked_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # SHA-256 de la api_key que usa el script de detección (config.json).
+    # Se regenera en cada descarga de configuración y se borra al revincular.
+    api_key_hash = db.Column(db.String(64))
+
+
+def asegurar_columnas_dispositivos():
+    """
+    db.create_all() no agrega columnas a tablas existentes: agrega las que
+    falten en `dispositivos` para no romper instalaciones previas.
+    Debe llamarse dentro de un app_context.
+    """
+    inspector = db.inspect(db.engine)
+    if 'dispositivos' not in inspector.get_table_names():
+        return
+
+    columnas = {col['name'] for col in inspector.get_columns('dispositivos')}
+    if 'api_key_hash' not in columnas:
+        with db.engine.begin() as conn:
+            conn.execute(db.text('ALTER TABLE dispositivos ADD COLUMN api_key_hash VARCHAR(64) NULL'))
 
 
 class DispositivoEvento(db.Model):

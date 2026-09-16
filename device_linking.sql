@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS dispositivos (
     last_seen DATETIME NULL,
     linked_at DATETIME NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    api_key_hash VARCHAR(64) NULL,
     INDEX idx_dispositivos_usuario_id (usuario_id),
     CONSTRAINT fk_dispositivos_usuario
         FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
@@ -44,3 +45,6 @@ CREATE TABLE IF NOT EXISTS dispositivo_comandos (
         FOREIGN KEY (dispositivo_id) REFERENCES dispositivos(id)
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- Migración para bases creadas antes de api_key_hash (run.py la aplica sola al arrancar):
+-- ALTER TABLE dispositivos ADD COLUMN api_key_hash VARCHAR(64) NULL;

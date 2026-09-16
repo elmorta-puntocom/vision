@@ -69,6 +69,9 @@ def create_app():
 
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'vision-dev-key-change-in-prod')
     app.config['VISION_API_KEY'] = os.environ.get('VISION_API_KEY', 'vision-internal-key')
+    # URL que se escribe en el config.json descargable. Si no se define, se usa
+    # la URL con la que el usuario abrió la web (útil detrás de un proxy/NAT).
+    app.config['VISION_PUBLIC_URL'] = os.environ.get('VISION_PUBLIC_URL', '')
     app.config['MP_ACCESS_TOKEN'] = os.environ.get('MP_ACCESS_TOKEN', '')
     app.config['MP_PUBLIC_KEY'] = os.environ.get('MP_PUBLIC_KEY', '')
     app.config['SQLALCHEMY_DATABASE_URI'] = mysql_uri

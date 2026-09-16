@@ -223,6 +223,18 @@
         border-top: 1px solid var(--border);
     }
 
+    .config-download-form {
+        margin: 0;
+    }
+
+    .config-hint {
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        line-height: 1.6;
+        margin-top: 0.75rem;
+    }
+
     .empty-devices {
         color: var(--text-muted);
         font-family: var(--font-mono);
@@ -291,6 +303,18 @@
                         <button class="command-btn secondary" data-device="{{ dispositivo.device_id }}" data-command="alert_off" type="button">
                             Apagar alerta
                         </button>
+                        <form method="POST"
+                              action="{{ url_for('main.descargar_configuracion', device_id=dispositivo.device_id) }}"
+                              class="config-download-form">
+                            <button class="command-btn secondary" type="submit"
+                                    title="Genera config.json para el programa de detección de la PC">
+                                Descargar configuración
+                            </button>
+                        </form>
+                    </div>
+                    <div class="config-hint">
+                        Guardá <code>config.json</code> en la misma carpeta que <code>deteccion_tiempo_real.py</code>.
+                        Cada descarga genera una clave nueva y la anterior deja de funcionar.
                     </div>
                 </article>
                 {% endfor %}
@@ -308,6 +332,15 @@
 
 {% block extra_scripts %}
 <script>
+    document.querySelectorAll('.config-download-form').forEach((form) => {
+        form.addEventListener('submit', (event) => {
+            const ok = confirm('Se generará una clave nueva. Si ya tenías un config.json de este dispositivo, dejará de funcionar. ¿Continuar?');
+            if (!ok) {
+                event.preventDefault();
+            }
+        });
+    });
+
     document.querySelectorAll('[data-command]').forEach((button) => {
         button.addEventListener('click', async () => {
             const deviceId = button.dataset.device;
