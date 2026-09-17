@@ -72,11 +72,33 @@ NORMAL_BLINK_MAX_SECONDS = 0.30
 # "Mis dispositivos" en la web y se guarda junto a este script).
 CONFIG_PATH = BASE_DIR / "config.json"
 
-# La IP del ESP32 no se configura: se busca por mDNS (vision-<device_id>.local)
-# y, si eso falla, se le pregunta a Flask la IP del último heartbeat.
+# Canal principal de la alarma: cable USB (serial). El puerto COM se detecta
+# solo, preguntandole a cada ESP32 conectado su device_id.
+ESP32_SERIAL_BAUDIOS = 115200
+ESP32_SERIAL_PREFIJO = "VISION:"
+ESP32_SERIAL_RESPUESTA_SECONDS = 0.5
+# Al abrir el puerto algunas placas se reinician: se le da tiempo a arrancar.
+ESP32_SERIAL_PING_SECONDS = 3.0
+ESP32_SERIAL_REBUSCAR_SECONDS = 5.0
+ESP32_SERIAL_VERIFICAR_SECONDS = 5.0
+ESP32_SERIAL_FALLOS_MAX = 3
+# VID USB de los conversores habituales de placas ESP32 (se prueban primero).
+ESP32_USB_VIDS = {
+    0x10C4: "CP210x",
+    0x1A86: "CH340/CH9102",
+    0x0403: "FTDI",
+    0x303A: "Espressif USB nativo",
+}
+# Debe ser bastante menor que ALARMA_SIN_REFRESCO_MS del firmware (5 s): el ESP32
+# apaga la alarma solo si deja de recibir ordenes.
+ESP32_REFRESCO_ALARMA_SECONDS = 1.0
+
+# Respaldo por WiFi (solo si no hay cable): la IP se busca por mDNS
+# (vision-<device_id>.local) y, si eso falla, se le pregunta a Flask.
 ESP32_TIMEOUT_SECONDS = 0.8
 ESP32_MDNS_TIMEOUT_SECONDS = 2.0
 ESP32_BACKEND_TIMEOUT_SECONDS = 3.0
+ESP32_WIFI_REINTENTO_SECONDS = 15.0
 DETECTION_REPORT_COOLDOWN_SECONDS = 20.0
 
 BLACKBOX_PRE_EVENT_SECONDS = 10.0
@@ -251,29 +273,244 @@ def enviar_alerta_off(localizador):
     return _enviar_peticion_esp32(localizador, "/alerta_off")
 
 
+def _respuesta_serial(linea_bytes):
+    """Devuelve lo que sigue a "VISION:" en una linea del ESP32, o None si es un log."""
+    linea = linea_bytes.decode("utf-8", errors="replace")
+    posicion = linea.find(ESP32_SERIAL_PREFIJO)
+    if posicion < 0:
+        return None
+    return linea[posicion + len(ESP32_SERIAL_PREFIJO):].strip()
+
+
+class Esp32Serial:
+    """Habla con el ESP32 por el cable USB. No hace falta elegir el puerto COM."""
+
+    def __init__(self, device_id):
+        self.device_id = device_id
+        self._puerto = None
+        self._nombre_puerto = None
+        self._fallos = 0
+        self._proxima_busqueda = 0.0
+        self._aviso_no_encontrado = False
+        self._aviso_sin_pyserial = False
+
+    @property
+    def conectado(self):
+        return self._puerto is not None
+
+    def conectar(self):
+        """Busca el ESP32 si no esta conectado (con pausa entre busquedas)."""
+        if self._puerto is not None:
+            return True
+        if time.monotonic() < self._proxima_busqueda:
+            return False
+        try:
+            return self._buscar()
+        finally:
+            self._proxima_busqueda = time.monotonic() + ESP32_SERIAL_REBUSCAR_SECONDS
+
+    def enviar(self, orden):
+        if not self.conectar():
+            return False
+        try:
+            self._puerto.reset_input_buffer()
+            self._puerto.write(f"{orden}\n".encode("ascii"))
+            if self._esperar(f"OK {orden}", ESP32_SERIAL_RESPUESTA_SECONDS):
+                self._fallos = 0
+                return True
+        except Exception as exc:  # SerialException/OSError: cable desenchufado
+            print(f"[USB] Se perdio la conexion con el ESP32 en {self._nombre_puerto}: {exc}")
+            self.cerrar()
+            return False
+
+        self._fallos += 1
+        print(f"[USB] El ESP32 no confirmo {orden} ({self._fallos}/{ESP32_SERIAL_FALLOS_MAX})")
+        if self._fallos >= ESP32_SERIAL_FALLOS_MAX:
+            self.cerrar()
+        return False
+
+    def verificar(self):
+        """PING periodico para notar si se desenchufo mientras no hay alarma."""
+        if self._puerto is None:
+            return False
+        try:
+            self._puerto.reset_input_buffer()
+            self._puerto.write(b"PING\n")
+            if self._esperar(f"PONG {self.device_id}", ESP32_SERIAL_RESPUESTA_SECONDS):
+                return True
+        except Exception as exc:
+            print(f"[USB] Se perdio la conexion con el ESP32 en {self._nombre_puerto}: {exc}")
+        self.cerrar()
+        return False
+
+    def cerrar(self):
+        if self._puerto is not None:
+            try:
+                self._puerto.close()
+            except Exception:
+                pass
+        self._puerto = None
+        self._nombre_puerto = None
+        self._fallos = 0
+
+    def _esperar(self, esperado, timeout, puerto=None):
+        puerto = puerto or self._puerto
+        limite = time.monotonic() + timeout
+        while time.monotonic() < limite:
+            if _respuesta_serial(puerto.readline()) == esperado:
+                return True
+        return False
+
+    def _buscar(self):
+        try:
+            import serial
+            from serial.tools import list_ports
+        except ImportError:
+            if not self._aviso_sin_pyserial:
+                self._aviso_sin_pyserial = True
+                print("[USB] Falta la libreria pyserial (pip install pyserial); se usara solo WiFi.")
+            return False
+
+        puertos_usb = [p for p in list_ports.comports() if p.vid is not None]
+        conocidos = [p for p in puertos_usb if p.vid in ESP32_USB_VIDS]
+        # Si no hay conversores conocidos se prueban los demas puertos USB.
+        for info in conocidos or puertos_usb:
+            puerto = self._abrir(serial, info.device)
+            if puerto is None:
+                continue
+
+            id_encontrado = self._ping(puerto)
+            if id_encontrado == self.device_id:
+                self._puerto = puerto
+                self._nombre_puerto = info.device
+                self._fallos = 0
+                self._aviso_no_encontrado = False
+                print(f"[USB] ESP32 {self.device_id} conectado en {info.device}")
+                return True
+
+            puerto.close()
+            if id_encontrado:
+                print(
+                    f"[USB] En {info.device} hay otro ESP32 ({id_encontrado}); "
+                    f"config.json corresponde a {self.device_id}."
+                )
+
+        if not self._aviso_no_encontrado:
+            self._aviso_no_encontrado = True
+            print("[USB] No se encontro el ESP32 por cable; se sigue buscando.")
+        return False
+
+    def _abrir(self, serial, nombre):
+        puerto = serial.Serial()
+        puerto.port = nombre
+        puerto.baudrate = ESP32_SERIAL_BAUDIOS
+        puerto.timeout = 0.1
+        puerto.write_timeout = 0.5
+        # En las placas ESP32, DTR/RTS reinician la placa: se dejan en bajo al abrir.
+        puerto.dtr = False
+        puerto.rts = False
+        try:
+            puerto.open()
+            return puerto
+        except Exception:
+            # Puerto ocupado (p. ej. Monitor Serie del Arduino IDE abierto) o no disponible.
+            return None
+
+    def _ping(self, puerto):
+        limite = time.monotonic() + ESP32_SERIAL_PING_SECONDS
+        try:
+            while time.monotonic() < limite:
+                puerto.reset_input_buffer()
+                puerto.write(b"PING\n")
+                fin_intento = time.monotonic() + ESP32_SERIAL_RESPUESTA_SECONDS
+                while time.monotonic() < fin_intento:
+                    respuesta = _respuesta_serial(puerto.readline())
+                    if respuesta and respuesta.startswith("PONG "):
+                        return respuesta[len("PONG "):].strip().upper()
+        except Exception:
+            pass
+        return None
+
+
 class Esp32AlarmController:
-    """Envia ordenes al ESP32 solo cuando cambia el estado de somnolencia."""
+    """
+    Mantiene la alarma del ESP32 en el estado pedido, en un hilo aparte.
+    Canal principal: cable USB. Respaldo: WiFi, solo si no hay cable.
+    Mientras dura la somnolencia la orden se reenvia cada segundo, porque el
+    firmware apaga la alarma solo si deja de recibir ordenes.
+    """
 
     def __init__(self, config):
         self.alarma_activada = False
+        self.usb = Esp32Serial(config.device_id)
         self.localizador = Esp32Localizador(config)
-        self._executor = ThreadPoolExecutor(max_workers=1)
-        # La primera orden tambien resuelve la IP, en segundo plano.
-        self._executor.submit(enviar_alerta_off, self.localizador)
+        self._wifi_pausado_hasta = 0.0
+        self._cambio = threading.Event()
+        self._detener = threading.Event()
+        self._hilo = threading.Thread(target=self._run, daemon=True, name="Esp32Alarma")
+        self._hilo.start()
 
     def update(self, somnolencia_detectada):
         if somnolencia_detectada == self.alarma_activada:
             return
 
         self.alarma_activada = somnolencia_detectada
-        accion = enviar_alerta_on if somnolencia_detectada else enviar_alerta_off
-        self._executor.submit(accion, self.localizador)
+        self._cambio.set()
 
     def apagar_y_cerrar(self):
-        self._executor.shutdown(wait=True, cancel_futures=False)
-        if self.alarma_activada:
-            enviar_alerta_off(self.localizador)
-            self.alarma_activada = False
+        self.alarma_activada = False
+        self._detener.set()
+        self._cambio.set()
+        self._hilo.join(timeout=10.0)
+        self.usb.cerrar()
+
+    def _run(self):
+        # None = estado desconocido: al arrancar se manda OFF para dejarlo en un estado conocido.
+        estado_enviado = None
+        ultimo_envio = 0.0
+        ultima_verificacion = time.monotonic()
+
+        while True:
+            deseado = self.alarma_activada
+            ahora = time.monotonic()
+            refresco = deseado and estado_enviado is True and (
+                ahora - ultimo_envio >= ESP32_REFRESCO_ALARMA_SECONDS
+            )
+
+            if deseado != estado_enviado or refresco:
+                if self._enviar(deseado, silencioso=refresco):
+                    estado_enviado = deseado
+                    ultimo_envio = time.monotonic()
+                else:
+                    estado_enviado = None
+            elif not deseado:
+                # En reposo: tener el cable listo antes de que haga falta.
+                if not self.usb.conectado:
+                    self.usb.conectar()
+                elif ahora - ultima_verificacion >= ESP32_SERIAL_VERIFICAR_SECONDS:
+                    ultima_verificacion = ahora
+                    self.usb.verificar()
+
+            if self._detener.is_set():
+                break
+            self._cambio.wait(ESP32_REFRESCO_ALARMA_SECONDS)
+            self._cambio.clear()
+
+    def _enviar(self, activar, silencioso=False):
+        orden = "ALERTA_ON" if activar else "ALERTA_OFF"
+        if self.usb.enviar(orden):
+            if not silencioso:
+                print(f"[USB] OK {orden}")
+            return True
+
+        ahora = time.monotonic()
+        if ahora < self._wifi_pausado_hasta:
+            return False
+        accion = enviar_alerta_on if activar else enviar_alerta_off
+        if accion(self.localizador):
+            return True
+        self._wifi_pausado_hasta = ahora + ESP32_WIFI_REINTENTO_SECONDS
+        return False
 
 
 def _float_or_none(value):

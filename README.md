@@ -122,5 +122,7 @@ python deteccion_tiempo_real.py
 # El script ya no usa variables de entorno ni la IP del ESP32:
 # descargá config.json desde "Mis dispositivos" > "Descargar configuración",
 # guardalo junto a deteccion_tiempo_real.py y ejecutalo normalmente.
+# La alarma va por el cable USB del ESP32 (el puerto COM se detecta solo);
+# requiere una vez: pip install pyserial. Cerrá el Monitor Serie del Arduino IDE.
 cd C:\Users\juanc\vision\vision
 python deteccion_tiempo_real.py
