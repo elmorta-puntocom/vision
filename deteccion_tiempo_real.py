@@ -1950,19 +1950,97 @@ def render_status(
         )
 
 
-def open_camera(camera_index=0):
-    cap = cv2.VideoCapture(camera_index)
+# ── Seleccion de camara ─────────────────────────────────────────────────────
+# En una notebook la camara integrada casi siempre es el indice 0 y la webcam
+# USB conectada despues recibe un indice mayor. Por eso, sin indicacion
+# explicita, se elige la camara que funcione con el indice MAS ALTO.
+# Se puede forzar una camara con:  python deteccion_tiempo_real.py --camara 1
+# o listar las disponibles con:    python deteccion_tiempo_real.py --listar-camaras
+CAMARA_MAX_INDICES = 5
+
+
+def _backend_camara():
+    # En Windows DirectShow abre y descarta indices inexistentes mucho mas rapido.
+    return cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+
+
+def _nombres_camaras():
+    """Nombres de las camaras en el orden de DirectShow (opcional: pip install pygrabber)."""
+    if not sys.platform.startswith("win"):
+        return []
+    try:
+        from pygrabber.dshow_graph import FilterGraph
+        return FilterGraph().get_input_devices()
+    except Exception:
+        return []
+
+
+def detectar_camaras(max_indices=CAMARA_MAX_INDICES):
+    """Devuelve los indices de las camaras que abren y entregan imagen."""
+    disponibles = []
+    for indice in range(max_indices):
+        cap = cv2.VideoCapture(indice, _backend_camara())
+        try:
+            if cap.isOpened():
+                ok, _ = cap.read()
+                if ok:
+                    disponibles.append(indice)
+        finally:
+            cap.release()
+    return disponibles
+
+
+def listar_camaras():
+    nombres = _nombres_camaras()
+    disponibles = detectar_camaras()
+    if not disponibles:
+        print("[CAMARA] No se encontro ninguna camara.")
+        return
+    print("[CAMARA] Camaras disponibles:")
+    for indice in disponibles:
+        nombre = nombres[indice] if indice < len(nombres) else "sin nombre"
+        print(f"  --camara {indice}  ->  {nombre}")
+
+
+def open_camera(camera_index=None):
+    """
+    Abre la camara indicada o, si no se indica, prioriza la webcam externa
+    (la de indice mas alto que funcione) por sobre la integrada de la notebook.
+    """
+    if camera_index is None:
+        env = os.getenv("VISION_CAMERA_INDEX", "").strip()
+        if env.isdigit():
+            camera_index = int(env)
+
+    if camera_index is None:
+        disponibles = detectar_camaras()
+        if not disponibles:
+            raise RuntimeError(
+                "No se encontro ninguna camara. Conecta la webcam y cerra otras "
+                "aplicaciones que la esten usando."
+            )
+        camera_index = disponibles[-1]
+        if len(disponibles) > 1:
+            print(
+                f"[CAMARA] Camaras detectadas: {disponibles}. Se usa la {camera_index} "
+                "(se asume webcam externa). Si no es la correcta: --camara <indice>."
+            )
+
+    nombres = _nombres_camaras()
+    nombre = nombres[camera_index] if camera_index < len(nombres) else ""
+    cap = cv2.VideoCapture(camera_index, _backend_camara())
     if not cap.isOpened():
         cap.release()
         raise RuntimeError(f"No se pudo abrir la camara con indice {camera_index}.")
+    print(f"[CAMARA] Usando camara {camera_index} {nombre}".rstrip())
     return cap
 
 
-def run_realtime_detection():
+def run_realtime_detection(camera_index=None):
     # Primero la configuracion: si falta config.json se avisa antes de cargar el modelo.
     config = cargar_configuracion()
     model, scaler, expected_features, interpreter = load_runtime_assets()
-    cap = open_camera(0)
+    cap = open_camera(camera_index)
     smoother = PredictionSmoother()
     eye_tracker = EyeClosureTracker()
     head_tracker = HeadNodTracker()
@@ -2147,8 +2225,21 @@ def run_realtime_detection():
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Deteccion de somnolencia Vision")
+    parser.add_argument("--camara", type=int, default=None,
+                        help="Indice de la camara a usar (por defecto: la webcam externa)")
+    parser.add_argument("--listar-camaras", action="store_true",
+                        help="Muestra las camaras disponibles y termina")
+    args = parser.parse_args()
+
+    if args.listar_camaras:
+        listar_camaras()
+        return
+
     try:
-        run_realtime_detection()
+        run_realtime_detection(args.camara)
     except Exception as exc:
         print(f"[FATAL] {exc}")
         raise
