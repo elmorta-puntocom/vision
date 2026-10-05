@@ -20,4 +20,4 @@
 // El usuario puede cambiarla desde el portal sin recompilar.
 #define SERVER_BASE_URL_DEFAULT "http://192.168.1.100:5050"
 
-#define FIRMWARE_VERSION "1.1.0"
+// La versión del firmware se define en esp32_alerta_wifi.ino.

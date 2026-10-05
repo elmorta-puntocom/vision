@@ -38,6 +38,18 @@ detecciones_pending = Table(
     Column('duracion_alerta', Float),
     Column('sincronizado', Boolean, default=False),
     Column('mysql_id', Integer),
+    Column('dispositivo_id', Integer),
+)
+
+# Copia mínima de cada dispositivo vinculado, para poder aceptar detecciones
+# (validar la api_key y saber a qué usuario pertenecen) aunque MySQL esté caído.
+dispositivos_cache = Table(
+    'dispositivos_cache',
+    _offline_meta,
+    Column('device_id', String(64), primary_key=True),
+    Column('dispositivo_id', Integer, nullable=False),
+    Column('usuario_id', Integer),
+    Column('api_key_hash', String(64)),
 )
 
 usuarios_cache = Table(
@@ -63,6 +75,12 @@ def init_offline_storage(app):
         poolclass=StaticPool,
     )
     _offline_meta.create_all(_offline_engine)
+
+    # create_all no agrega columnas a tablas SQLite ya existentes.
+    with _offline_engine.begin() as conn:
+        columnas = {fila[1] for fila in conn.execute(text('PRAGMA table_info(detecciones_pending)'))}
+        if 'dispositivo_id' not in columnas:
+            conn.execute(text('ALTER TABLE detecciones_pending ADD COLUMN dispositivo_id INTEGER'))
 
 
 def _engine():
@@ -100,6 +118,42 @@ def cache_usuario(u):
         conn.commit()
 
 
+def cache_dispositivo(dispositivo):
+    """Actualiza la copia SQLite de un dispositivo (se llama cuando MySQL anda)."""
+    datos = {
+        'dispositivo_id': dispositivo.id,
+        'usuario_id': dispositivo.usuario_id,
+        'api_key_hash': dispositivo.api_key_hash,
+    }
+    try:
+        with _engine().begin() as conn:
+            existe = conn.execute(
+                dispositivos_cache.select().where(
+                    dispositivos_cache.c.device_id == dispositivo.device_id
+                )
+            ).fetchone()
+            if existe:
+                conn.execute(
+                    dispositivos_cache.update()
+                    .where(dispositivos_cache.c.device_id == dispositivo.device_id)
+                    .values(**datos)
+                )
+            else:
+                conn.execute(
+                    dispositivos_cache.insert().values(device_id=dispositivo.device_id, **datos)
+                )
+    except Exception as exc:
+        logger.warning(f'[OFFLINE] No se pudo actualizar la copia del dispositivo: {exc}')
+
+
+def dispositivo_desde_cache(device_id):
+    """Devuelve la copia SQLite del dispositivo (o None) para el modo offline."""
+    with _engine().connect() as conn:
+        return conn.execute(
+            dispositivos_cache.select().where(dispositivos_cache.c.device_id == device_id)
+        ).fetchone()
+
+
 def guardar_deteccion_offline(
     usuario_id,
     tipo_evento,
@@ -107,13 +161,17 @@ def guardar_deteccion_offline(
     valor_ear=None,
     valor_pitch=None,
     duracion_alerta=None,
+    dispositivo_id=None,
+    fecha_hora=None,
 ):
-    """Guarda una detección en la cola SQLite local, con o sin WiFi."""
+    """Guarda una detección en la cola SQLite local cuando MySQL no responde."""
+    fecha_hora = fecha_hora or datetime.utcnow()
     with _engine().connect() as conn:
         conn.execute(
             detecciones_pending.insert().values(
                 usuario_id=usuario_id,
-                fecha_hora=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                dispositivo_id=dispositivo_id,
+                fecha_hora=fecha_hora.strftime('%Y-%m-%d %H:%M:%S'),
                 tipo_evento=tipo_evento,
                 video_path=video_path,
                 valor_ear=valor_ear,
@@ -146,6 +204,8 @@ def registrar_deteccion_mysql(
     valor_ear=None,
     valor_pitch=None,
     duracion_alerta=None,
+    dispositivo_id=None,
+    fecha_hora=None,
 ):
     """Guarda la deteccion en MySQL y actualiza estadisticas del usuario."""
     det = Deteccion(
@@ -155,6 +215,9 @@ def registrar_deteccion_mysql(
         valor_ear=valor_ear,
         valor_pitch=valor_pitch,
         duracion_alerta=duracion_alerta,
+        dispositivo_id=dispositivo_id,
+        # Si el evento llega tarde (cola offline) se conserva la hora real.
+        fecha_hora=fecha_hora or datetime.utcnow(),
     )
     db.session.add(det)
     db.session.flush()
@@ -175,6 +238,13 @@ def registrar_deteccion_mysql(
         f'evento: {tipo_evento}, id={det.id}'
     )
     return det, stats
+
+
+def _parse_fecha(valor):
+    try:
+        return datetime.strptime(str(valor), '%Y-%m-%d %H:%M:%S')
+    except (TypeError, ValueError):
+        return None
 
 
 def mysql_disponible():
@@ -220,6 +290,8 @@ def sincronizar_pendientes():
                 valor_ear=row.valor_ear,
                 valor_pitch=row.valor_pitch,
                 duracion_alerta=row.duracion_alerta,
+                dispositivo_id=row.dispositivo_id,
+                fecha_hora=_parse_fecha(row.fecha_hora),
             )
 
             with _engine().connect() as offline_conn:

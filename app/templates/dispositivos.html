@@ -145,6 +145,27 @@
         box-shadow: 0 0 20px rgba(0,229,255,0.4);
     }
 
+    .device-status-wrap { text-align: right; }
+    .device-channel {
+        font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.1em;
+        color: var(--text-muted); margin-top: 0.3rem; text-transform: uppercase;
+    }
+    .device-events { margin-top: 1.25rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+    .device-events-title {
+        font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.15em;
+        text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.6rem;
+    }
+    .device-events table { width: 100%; border-collapse: collapse; }
+    .device-events th {
+        font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase;
+        color: var(--text-muted); text-align: left; font-weight: 400; padding: 0 0.5rem 0.35rem 0;
+    }
+    .device-events td {
+        font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-mid);
+        padding: 0.35rem 0.5rem 0.35rem 0; border-bottom: 1px solid rgba(30,45,61,0.6);
+    }
+    .device-events-empty { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
+
     .device-list {
         display: grid;
         gap: 1.25rem;
@@ -279,21 +300,27 @@
             {% if dispositivos %}
             <div class="device-list">
                 {% for dispositivo in dispositivos %}
-                {% set online = dispositivo.last_seen and (now() - dispositivo.last_seen).total_seconds() < 600 %}
+                {% set estado = estados[dispositivo.device_id] %}
                 <article class="device-row">
                     <div class="device-row-head">
                         <div class="device-id">{{ dispositivo.device_id }}</div>
-                        <div class="device-status {{ '' if online else 'offline' }}">
-                            {{ 'Online' if online else 'Offline' }}
+                        <div class="device-status-wrap">
+                            <div class="device-status {{ '' if estado.online else 'offline' }}"
+                                 data-estado-dispositivo="{{ dispositivo.device_id }}">
+                                {{ estado.texto }}
+                            </div>
+                            <div class="device-channel" data-detalle-dispositivo="{{ dispositivo.device_id }}">
+                                {{ estado.detalle }}
+                            </div>
                         </div>
                     </div>
                     <div class="device-meta">
                         <div>MAC: <span style="color: var(--text);">{{ dispositivo.mac or 'Sin registrar' }}</span></div>
-                        <div>IP: <span style="color: var(--text);">{{ dispositivo.ip_address or 'Sin registrar' }}</span></div>
+                        <div>IP: <span style="color: var(--text);" data-ip-dispositivo="{{ dispositivo.device_id }}">{{ dispositivo.ip_address or 'Sin registrar' }}</span></div>
                         <div>Firmware: <span style="color: var(--text);">{{ dispositivo.firmware_version or 'N/D' }}</span></div>
                         <div>
                             Última conexión:
-                            <span style="color: var(--text);">{{ dispositivo.last_seen.strftime('%d/%m/%Y %H:%M:%S') if dispositivo.last_seen else 'Nunca' }}</span>
+                            <span style="color: var(--text);" data-ultima-conexion="{{ dispositivo.device_id }}">{{ estado.ultima_conexion or 'Nunca' }}</span>
                         </div>
                     </div>
                     <div class="device-actions">
@@ -316,6 +343,33 @@
                         Guardá <code>config.json</code> en la misma carpeta que <code>deteccion_tiempo_real.py</code>.
                         Cada descarga genera una clave nueva y la anterior deja de funcionar.
                     </div>
+                    <div class="device-events">
+                        <div class="device-events-title">Activaciones de alarma informadas por el ESP32</div>
+                        {% set lista = eventos[dispositivo.device_id] %}
+                        {% if lista %}
+                        <table>
+                            <tr>
+                                <th>Fecha y hora</th>
+                                <th>Alarma</th>
+                                <th>Canal de la orden</th>
+                            </tr>
+                            {% for ev in lista %}
+                            <tr>
+                                <td>{{ ev.created_at|hora_local }}</td>
+                                <td>{{ 'Encendida' if ev.event_type == 'alarma_on' else 'Apagada' }}</td>
+                                <td>
+                                    {% if ev.value == 'SEGURIDAD' %}Apagado automático de seguridad
+                                    {% elif ev.value == 'WEB' %}Plataforma web
+                                    {% elif ev.value == 'WIFI' %}WiFi
+                                    {% else %}{{ ev.value }}{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                        {% else %}
+                        <div class="device-events-empty">Todavía no hay activaciones registradas.</div>
+                        {% endif %}
+                    </div>
                 </article>
                 {% endfor %}
             </div>
@@ -331,6 +385,8 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<div id="panel-vivo" hidden data-url="{{ url_for('main.api_panel_estado') }}"></div>
+<script src="{{ url_for('static', filename='js/panel_vivo.js') }}"></script>
 <script>
     document.querySelectorAll('.config-download-form').forEach((form) => {
         form.addEventListener('submit', (event) => {

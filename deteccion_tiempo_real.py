@@ -1,12 +1,14 @@
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import queue
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -100,6 +102,16 @@ ESP32_MDNS_TIMEOUT_SECONDS = 2.0
 ESP32_BACKEND_TIMEOUT_SECONDS = 3.0
 ESP32_WIFI_REINTENTO_SECONDS = 15.0
 DETECTION_REPORT_COOLDOWN_SECONDS = 20.0
+
+# Cada cuanto se le informa a la web si el ESP32 responde por el cable USB,
+# para que "Mis dispositivos" lo muestre Online aunque no tenga WiFi.
+ESP32_PRESENCIA_SECONDS = 5.0
+
+# Base de datos offline (SQLite) de la notebook: si el servidor web no
+# responde, cada deteccion se guarda aca y se sube sola a MySQL cuando vuelve
+# la conexion, conservando la hora real del evento.
+PENDIENTES_DB_PATH = BASE_DIR / "vision_pendientes.db"
+PENDIENTES_REINTENTO_SECONDS = 30.0
 
 BLACKBOX_PRE_EVENT_SECONDS = 10.0
 BLACKBOX_CONFIRMATION_SECONDS = 0.75
@@ -449,6 +461,12 @@ class Esp32AlarmController:
         self._detener = threading.Event()
         self._hilo = threading.Thread(target=self._run, daemon=True, name="Esp32Alarma")
         self._hilo.start()
+        # Informa a la web si el ESP32 responde por USB (estado Online/Offline).
+        self._config = config
+        self._hilo_presencia = threading.Thread(
+            target=self._informar_presencia, daemon=True, name="Esp32Presencia"
+        )
+        self._hilo_presencia.start()
 
     def update(self, somnolencia_detectada):
         if somnolencia_detectada == self.alarma_activada:
@@ -462,7 +480,30 @@ class Esp32AlarmController:
         self._detener.set()
         self._cambio.set()
         self._hilo.join(timeout=10.0)
+        self._hilo_presencia.join(timeout=5.0)
         self.usb.cerrar()
+
+    def _informar_presencia(self):
+        """
+        Cada 5 s le avisa al servidor si el ESP32 esta respondiendo por el cable.
+        Si el servidor no esta disponible no pasa nada: la alarma funciona igual.
+        """
+        url = f"{self._config.server_url}/api/devices/{self._config.device_id}/presencia"
+        aviso_clave = False
+        while not self._detener.is_set():
+            try:
+                respuesta = requests.post(
+                    url,
+                    json={"usb": self.usb.conectado},
+                    headers={"X-Vision-Api-Key": self._config.api_key},
+                    timeout=2.0,
+                )
+                if respuesta.status_code == 401 and not aviso_clave:
+                    aviso_clave = True
+                    print("[WEB] El servidor rechazo la api_key: volve a descargar config.json.")
+            except requests.exceptions.RequestException:
+                pass
+            self._detener.wait(ESP32_PRESENCIA_SECONDS)
 
     def _run(self):
         # None = estado desconocido: al arrancar se manda OFF para dejarlo en un estado conocido.
@@ -539,16 +580,40 @@ class RecordedDrowsinessEvent:
     estado: str
     confianza: float | None
     video_seconds: float
+    # Hora real (UTC) en que empezo el episodio. La web la muestra en hora
+    # argentina, aunque el evento llegue tarde desde la base offline.
+    fecha_hora_utc: str | None = None
+
+
+def _utc_iso(hace_segundos=0.0):
+    """Fecha y hora UTC actual (menos hace_segundos) en formato ISO, sin zona."""
+    momento = datetime.now(timezone.utc) - timedelta(seconds=max(0.0, hace_segundos))
+    return momento.replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 class DetectionReporter:
-    """Registra en el backend un evento por episodio de somnolencia."""
+    """
+    Registra en el backend un evento por episodio de somnolencia.
 
-    def __init__(self, config):
+    Si el servidor no responde, el evento se guarda en la base de datos
+    offline SQLite de la notebook (vision_pendientes.db) y un hilo lo vuelve a
+    enviar cada 30 s. Cuando la conexion vuelve, la deteccion se sube a MySQL
+    con la hora real en que ocurrio.
+    """
+
+    def __init__(self, config, db_path=PENDIENTES_DB_PATH):
         self.config = config
+        self.db_path = str(db_path)
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self._lock_db = threading.Lock()
+        self._detener = threading.Event()
         self._active_reported = False
         self._last_report_at = 0.0
+        self._crear_base_offline()
+        self._hilo_reintentos = threading.Thread(
+            target=self._reintentar_periodicamente, daemon=True, name="ReenvioPendientes"
+        )
+        self._hilo_reintentos.start()
 
     def update(self, somnolencia_detectada, decision, eye_evidence, head_evidence):
         if not somnolencia_detectada:
@@ -596,12 +661,103 @@ class DetectionReporter:
             estado=decision.state,
             confianza=_float_or_none(decision.confidence),
             video_seconds=0.0,
+            fecha_hora_utc=_utc_iso(),
         )
 
-    def _send(self, event):
-        payload = {
-            "api_key": self.config.api_key,
-            "device_id": self.config.device_id,
+    # ── Base de datos offline (SQLite) ─────────────────────────────────────
+
+    @contextmanager
+    def _base(self):
+        """Conexion a la base offline: confirma los cambios y siempre la cierra."""
+        with self._lock_db:
+            conn = sqlite3.connect(self.db_path, timeout=5.0)
+            try:
+                yield conn
+                conn.commit()
+            finally:
+                conn.close()
+
+    def _crear_base_offline(self):
+        with self._base() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS detecciones_pendientes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fecha_hora_utc TEXT,
+                    datos_json TEXT NOT NULL,
+                    intentos INTEGER NOT NULL DEFAULT 0,
+                    creado_en TEXT NOT NULL
+                )
+                """
+            )
+
+    def _guardar_pendiente(self, payload):
+        with self._base() as conn:
+            conn.execute(
+                "INSERT INTO detecciones_pendientes (fecha_hora_utc, datos_json, creado_en) "
+                "VALUES (?, ?, ?)",
+                (payload.get("fecha_hora_utc"), json.dumps(payload, ensure_ascii=False), _utc_iso()),
+            )
+        print(
+            "[OFFLINE] Servidor no disponible: deteccion guardada en la base SQLite "
+            f"{Path(self.db_path).name}; se subira a MySQL cuando vuelva la conexion."
+        )
+
+    def pendientes(self):
+        with self._base() as conn:
+            return conn.execute("SELECT COUNT(*) FROM detecciones_pendientes").fetchone()[0]
+
+    def sincronizar_pendientes(self):
+        """Sube en orden las detecciones guardadas offline. Se detiene si el servidor sigue caido."""
+        with self._base() as conn:
+            filas = conn.execute(
+                "SELECT id, datos_json FROM detecciones_pendientes ORDER BY id"
+            ).fetchall()
+            if not filas:
+                return 0
+
+            print(f"[SYNC] Subiendo {len(filas)} deteccion(es) guardada(s) offline...")
+            subidas = 0
+            for fila_id, datos_json in filas:
+                try:
+                    payload = json.loads(datos_json)
+                except ValueError:
+                    conn.execute("DELETE FROM detecciones_pendientes WHERE id = ?", (fila_id,))
+                    continue
+
+                resultado = self._enviar_payload(payload)
+                if resultado == "reintentar":
+                    conn.execute(
+                        "UPDATE detecciones_pendientes SET intentos = intentos + 1 WHERE id = ?",
+                        (fila_id,),
+                    )
+                    break
+                # "ok" o "descartar": sale de la cola.
+                conn.execute("DELETE FROM detecciones_pendientes WHERE id = ?", (fila_id,))
+                if resultado == "ok":
+                    subidas += 1
+
+        if subidas:
+            print(f"[SYNC] {subidas} deteccion(es) offline sincronizada(s) con MySQL.")
+        return subidas
+
+    def _reintentar_periodicamente(self):
+        # El primer intento es al arrancar: pueden quedar pendientes de otra sesion.
+        while True:
+            try:
+                self.sincronizar_pendientes()
+            except Exception as exc:
+                print(f"[SYNC] Error al subir pendientes: {exc}")
+            if self._detener.wait(PENDIENTES_REINTENTO_SECONDS):
+                break
+
+    # ── Envio al servidor ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _payload(event):
+        # La api_key no se guarda en la base offline: se agrega al enviar, asi
+        # sigue sirviendo aunque se descargue un config.json nuevo.
+        return {
             "tipo_evento": event.tipo_evento,
             "video_path": event.video_path,
             "valor_ear": event.valor_ear,
@@ -610,25 +766,55 @@ class DetectionReporter:
             "estado": event.estado,
             "confianza": event.confianza,
             "duracion_video": event.video_seconds,
+            "fecha_hora_utc": event.fecha_hora_utc,
         }
 
+    def _enviar_payload(self, payload):
+        """Devuelve "ok", "reintentar" (problema temporal) o "descartar" (dato invalido)."""
+        datos = dict(payload)
+        datos["api_key"] = self.config.api_key
+        datos["device_id"] = self.config.device_id
         url = f"{self.config.server_url}/api/deteccion"
         try:
-            response = requests.post(url, json=payload, timeout=3.0)
-            response.raise_for_status()
-            data = response.json()
+            response = requests.post(url, json=datos, timeout=3.0)
+        except requests.exceptions.RequestException as exc:
+            print(f"[API] No se pudo registrar deteccion en {url}: {exc.__class__.__name__}")
+            return "reintentar"
+
+        if response.status_code in (200, 201):
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
             print(
                 "[API] Deteccion registrada "
                 f"id={data.get('deteccion_id')} usuario={data.get('usuario_id')} "
                 f"total={data.get('total_eventos')} score={data.get('score_conduccion')}"
             )
-        except requests.exceptions.RequestException as exc:
-            print(f"[API] No se pudo registrar deteccion en {url}: {exc}")
-        except ValueError:
-            print(f"[API] Respuesta no JSON al registrar deteccion: {response.text}")
+            return "ok"
+        if response.status_code == 202:
+            # MySQL estaba caido: el servidor la guardo en su propia base SQLite.
+            print("[API] Deteccion guardada en la base offline del servidor (MySQL no disponible).")
+            return "ok"
+        if response.status_code == 401:
+            # Se conserva: con un config.json nuevo y el script reiniciado se reenvia.
+            print("[API] El servidor rechazo la api_key: volve a descargar config.json.")
+            return "reintentar"
+        if 400 <= response.status_code < 500:
+            print(f"[API] El servidor rechazo la deteccion ({response.status_code}): {response.text[:200]}")
+            return "descartar"
+        print(f"[API] Error del servidor ({response.status_code}); se reintentara.")
+        return "reintentar"
+
+    def _send(self, event):
+        payload = self._payload(event)
+        if self._enviar_payload(payload) == "reintentar":
+            self._guardar_pendiente(payload)
 
     def cerrar(self):
         self._executor.shutdown(wait=True, cancel_futures=False)
+        self._detener.set()
+        self._hilo_reintentos.join(timeout=5.0)
 
 
 class PredictionSmoother:
@@ -948,6 +1134,8 @@ class BlackBoxRecorder:
         frame_size = (frame.shape[1], frame.shape[0])
         output_path = self._make_output_path()
         self.event_started_at = self.candidate_started_at or now
+        # Hora real del comienzo del episodio (no la del envio al servidor).
+        self.event_started_utc = _utc_iso(now - self.event_started_at)
         self.last_drowsy_at = now
         self.normal_started_at = None
         self.recording = True
@@ -1057,6 +1245,7 @@ class BlackBoxRecorder:
             estado=self.event_state or "Somnolencia",
             confianza=self.event_confidence,
             video_seconds=video_seconds,
+            fecha_hora_utc=getattr(self, "event_started_utc", None) or _utc_iso(),
         )
 
     def _on_video_finished(

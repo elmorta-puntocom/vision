@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app import bcrypt, create_app, db  # noqa: E402
-from app.models import Dispositivo, asegurar_columnas_dispositivos  # noqa: E402
+from app.models import Dispositivo, verificar_esquema  # noqa: E402
 
 
 def build_parser():
@@ -26,8 +26,7 @@ def main():
 
     app = create_app()
     with app.app_context():
-        db.create_all()
-        asegurar_columnas_dispositivos()
+        verificar_esquema()
 
         if Dispositivo.query.filter_by(device_id=device_id).first():
             raise SystemExit(f'Ya existe el dispositivo {device_id}')

@@ -645,8 +645,8 @@
                 <ul class="includes-list">
                     <li><span class="check">✓</span> Dispositivo Vision hardware (cámara + ESP32)</li>
                     <li><span class="check">✓</span> Software de IA pre-instalado</li>
-                    <li><span class="check">✓</span> Soporte de montaje para parabrisas</li>
-                    <li><span class="check">✓</span> Cable USB-C de alimentación (2m)</li>
+                    <li><span class="check">✓</span> Instalación profesional en el vehículo (12 V con fusible)</li>
+                    <li><span class="check">✓</span> Módulo de vibración para el respaldo del asiento</li>
                     <li><span class="check">✓</span> Acceso a plataforma web 12 meses</li>
                     <li><span class="check">✓</span> Activación del perfil del conductor</li>
                     <li><span class="check">✓</span> Soporte técnico por e-mail</li>
@@ -663,7 +663,7 @@
                         </div>
                         <div class="inst-row">
                             <span class="cuotas">6 cuotas</span>
-                            <span class="valor">$ 34.999 / mes</span>
+                            <span class="valor">$ 31.667 / mes</span>
                             <span class="sin-interes">SIN INTERÉS</span>
                         </div>
                         <div class="inst-row">
@@ -707,23 +707,23 @@
         <div class="specs-grid">
             <div class="spec-item">
                 <div class="spec-key">Procesador de IA</div>
-                <div class="spec-val">MediaPipe Face Mesh</div>
-                <div class="spec-sub">468 landmarks faciales en tiempo real</div>
+                <div class="spec-val">MediaPipe + TensorFlow</div>
+                <div class="spec-sub">478 landmarks faciales en tiempo real</div>
             </div>
             <div class="spec-item">
-                <div class="spec-key">Latencia de detección</div>
+                <div class="spec-key">Latencia de la alerta</div>
                 <div class="spec-val">&lt; 500 ms</div>
-                <div class="spec-sub">Desde captura hasta alerta activa</div>
+                <div class="spec-sub">Desde la confirmación hasta la alarma</div>
             </div>
             <div class="spec-item">
                 <div class="spec-key">Umbral EAR</div>
-                <div class="spec-val">0.20</div>
-                <div class="spec-sub">Eye Aspect Ratio configurable</div>
+                <div class="spec-val">0.22</div>
+                <div class="spec-sub">Ojos cerrados 0,5 s + 0,75 s de confirmación</div>
             </div>
             <div class="spec-item">
                 <div class="spec-key">Umbral Pitch</div>
-                <div class="spec-val">30°</div>
-                <div class="spec-sub">Ángulo de cabeceo calibrado</div>
+                <div class="spec-val">18°</div>
+                <div class="spec-sub">Respecto de la posición de referencia</div>
             </div>
             <div class="spec-item">
                 <div class="spec-key">Búfer pre-evento</div>
@@ -733,12 +733,12 @@
             <div class="spec-item">
                 <div class="spec-key">Actuadores</div>
                 <div class="spec-val">Buzzer + Vibración</div>
-                <div class="spec-sub">ESP32 — alerta persistente</div>
+                <div class="spec-sub">ESP32 por USB o WiFi — alerta sostenida</div>
             </div>
             <div class="spec-item">
                 <div class="spec-key">Visión nocturna</div>
                 <div class="spec-val">LEDs IR integrados</div>
-                <div class="spec-sub">Compatible con cámara IP Gadnic</div>
+                <div class="spec-sub">Cámara dedicada del equipo</div>
             </div>
             <div class="spec-item">
                 <div class="spec-key">Almacenamiento</div>
@@ -747,8 +747,8 @@
             </div>
             <div class="spec-item">
                 <div class="spec-key">Seguridad</div>
-                <div class="spec-val">Bcrypt + HTTPS</div>
-                <div class="spec-sub">Videos encriptados por perfil</div>
+                <div class="spec-val">Bcrypt + sesiones</div>
+                <div class="spec-sub">Videos privados por perfil</div>
             </div>
         </div>
     </div>
@@ -806,10 +806,8 @@
                 <span class="faq-arrow">+</span>
             </button>
             <div class="faq-answer">
-                El sistema es compatible con cualquier smartphone Android o iOS con cámara 
-                frontal de al menos 720p, o con cámaras IP de la línea Gadnic (incluye 
-                soporte de visión nocturna infrarroja). No se requiere hardware adicional 
-                para la detección básica.
+                Ninguno: el equipo Vision incluye su propia cámara dedicada, con iluminación 
+                infrarroja para uso nocturno. No se necesita un teléfono ni otra cámara.
             </div>
         </div>
         <div class="faq-item">
@@ -818,10 +816,9 @@
                 <span class="faq-arrow">+</span>
             </button>
             <div class="faq-answer">
-                Sí. Cada clip está vinculado exclusivamente a tu usuario mediante un ID 
-                encriptado. Nadie más —ni siquiera el administrador— puede acceder a tus 
-                registros sin tus credenciales. Las contraseñas se almacenan con hash 
-                Bcrypt + salt único.
+                Sí. Cada clip queda vinculado a tu cuenta y solo se puede ver con tu sesión 
+                iniciada: nadie más —ni siquiera el administrador— puede reproducir tus 
+                videos. Las contraseñas se almacenan con hash Bcrypt + salt único.
             </div>
         </div>
         <div class="faq-item">
@@ -830,10 +827,11 @@
                 <span class="faq-arrow">+</span>
             </button>
             <div class="faq-answer">
-                El kit incluye un soporte de succión para parabrisas. La instalación toma 
-                menos de 5 minutos: colocás el soporte, conectás el cable USB-C al encendedor 
-                o cargador y ejecutás la aplicación. El sistema calibra los umbrales del 
-                conductor de forma automática en los primeros 30 segundos.
+                La instalación la realiza un técnico y está incluida en el precio: fija el 
+                equipo en el habitáculo sin obstruir tu visión, lo conecta al sistema eléctrico 
+                de 12 V con fusible y monta el módulo de vibración en el respaldo de tu asiento 
+                (1 a 2 horas). Al iniciar la marcha, mirá al frente unos segundos para que el 
+                sistema tome la posición de referencia de tu cabeza.
             </div>
         </div>
         <div class="faq-item">
@@ -843,9 +841,7 @@
             </button>
             <div class="faq-answer">
                 El plan incluye soporte técnico por e-mail con respuesta en 48 horas hábiles. 
-                Para flotas empresariales ofrecemos soporte prioritario con SLA de 24 horas. 
-                El código fuente del software es auditabe por el cliente bajo acuerdo de 
-                confidencialidad.
+                Para flotas empresariales ofrecemos soporte prioritario con SLA de 24 horas.
             </div>
         </div>
     </div>
@@ -854,7 +850,7 @@
     <div class="buy-footer-banner">
         <div class="buy-footer-banner-text">
             <strong>¿Gestionás una flota o tenés dudas antes de comprar?</strong>
-            Escribinos a <span style="color: var(--accent);">vision@itrt.edu.ar</span> — respondemos 
+            Escribinos a <span style="color: var(--accent);">contacto.vision88@gmail.com</span> — respondemos 
             consultas técnicas y cotizaciones para empresas de transporte, remises y logística.
         </div>
         <a href="{{ url_for('main.register') }}" class="nav-btn filled" style="white-space: nowrap;">

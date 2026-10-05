@@ -10,3 +10,9 @@ iniciar_vision.bat
 # Configuración local con secretos (no subir)
 config.json
 esp32_alerta_wifi/config_dispositivo.h
+
+# Base de datos offline (SQLite) del programa de detección
+vision_pendientes.db
+
+# Secretos locales (copiar .env.example como .env)
+.env

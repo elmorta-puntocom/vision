@@ -1,7 +1,7 @@
 import os
 
 from app import create_app, db, logger
-from app.models import asegurar_columnas_dispositivos
+from app.models import verificar_esquema
 from app.services import start_sync_thread
 
 try:
@@ -18,8 +18,7 @@ app = create_app()
 def inicializar_mysql():
     with app.app_context():
         try:
-            db.create_all()
-            asegurar_columnas_dispositivos()
+            verificar_esquema()
             logger.info('[DB] Tablas MySQL verificadas/creadas.')
         except Exception as e:
             logger.error(f'[DB] No se pudo conectar a MySQL al inicio: {e}')

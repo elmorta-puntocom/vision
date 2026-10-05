@@ -37,7 +37,9 @@ from .models import (
     Usuario,
 )
 from .services import (
+    cache_dispositivo,
     contar_pendientes_usuario,
+    dispositivo_desde_cache,
     guardar_deteccion_offline,
     mysql_disponible,
     registrar_deteccion_mysql,
@@ -49,8 +51,17 @@ bp = Blueprint('main', __name__)
 DEFAULT_USER_ROLE = 'Usuario común'
 DEFAULT_ROLES = ('Administrador', DEFAULT_USER_ROLE)
 DEVICE_SIGNATURE_TTL_SECONDS = 300
+# Para VINCULAR se acepta un heartbeat de hasta 10 minutos de antigüedad.
 DEVICE_ONLINE_WINDOW_MINUTES = 10
+# Para mostrar Online/Offline: el ESP32 consulta comandos cada 5 s y el
+# programa de detección informa el USB cada 5 s, así que 20 s de silencio
+# significan que se desconectó.
+DEVICE_STATUS_WINDOW_SECONDS = 20
 ALLOWED_DEVICE_COMMANDS = {'alert_on', 'alert_off'}
+ALLOWED_DEVICE_EVENTS = {'alarma_on', 'alarma_off'}
+ALLOWED_DEVICE_CANALES = {'USB', 'WIFI', 'WEB', 'SEGURIDAD'}
+TIPOS_EVENTO = ('Ojos Cerrados', 'Cabeceo', 'Ambos')
+HISTORIAL_LIMITE = 300
 
 # Producto único simulado para el checkout de Mercado Pago
 PRODUCTO_VISION = {
@@ -124,7 +135,7 @@ def _clean_device_id(value):
     return (value or '').strip().upper()
 
 
-def _device_payload(data, include_mac=False):
+def _device_payload(data, include_mac=False, extra_fields=()):
     parts = [
         _clean_device_id(data.get('device_id')),
         str(data.get('ts', '')).strip(),
@@ -132,10 +143,13 @@ def _device_payload(data, include_mac=False):
     ]
     if include_mac:
         parts.insert(1, str(data.get('mac', '')).strip().upper())
+    # Campos propios del mensaje (por ejemplo el evento de alarma) también se
+    # firman, para que nadie pueda alterarlos en el camino.
+    parts.extend(str(data.get(campo, '')).strip() for campo in extra_fields)
     return '|'.join(parts)
 
 
-def _verify_device_signature(data, dispositivo, include_mac=False):
+def _verify_device_signature(data, dispositivo, include_mac=False, extra_fields=()):
     signature = str(data.get('signature', '')).strip().lower()
     ts = str(data.get('ts', '')).strip()
     nonce = str(data.get('nonce', '')).strip()
@@ -156,7 +170,7 @@ def _verify_device_signature(data, dispositivo, include_mac=False):
 
     expected = hmac.new(
         dispositivo.device_secret.encode('utf-8'),
-        _device_payload(data, include_mac=include_mac).encode('utf-8'),
+        _device_payload(data, include_mac=include_mac, extra_fields=extra_fields).encode('utf-8'),
         hashlib.sha256,
     ).hexdigest()
 
@@ -166,14 +180,16 @@ def _verify_device_signature(data, dispositivo, include_mac=False):
     return True, ''
 
 
-def _get_signed_device(data, include_mac=False):
+def _get_signed_device(data, include_mac=False, extra_fields=()):
     device_id = _clean_device_id(data.get('device_id'))
     dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
 
     if not dispositivo:
         return None, 'device_not_registered'
 
-    ok, error = _verify_device_signature(data, dispositivo, include_mac=include_mac)
+    ok, error = _verify_device_signature(
+        data, dispositivo, include_mac=include_mac, extra_fields=extra_fields
+    )
     if not ok:
         return None, error
 
@@ -189,6 +205,69 @@ def _device_api_key_valida(dispositivo, api_key):
     if not dispositivo or not dispositivo.api_key_hash or not api_key:
         return False
     return hmac.compare_digest(dispositivo.api_key_hash, _hash_api_key(str(api_key)))
+
+
+def _hace_segundos(momento, ahora):
+    if not momento:
+        return None
+    return (ahora - momento).total_seconds()
+
+
+def _a_hora_local(momento, formato='%d/%m/%Y %H:%M:%S'):
+    if not momento:
+        return None
+    return (momento + current_app.config['UTC_OFFSET']).strftime(formato)
+
+
+def _estado_dispositivo(dispositivo, ahora=None):
+    """
+    Estado en vivo de un ESP32, combinando las dos fuentes:
+    - WiFi: el propio ESP32 actualiza last_seen (heartbeat y consulta de comandos).
+    - USB: el programa de detección informa que el ESP32 le responde por cable.
+    """
+    ahora = ahora or datetime.utcnow()
+    ventana = DEVICE_STATUS_WINDOW_SECONDS
+
+    hace_wifi = _hace_segundos(dispositivo.last_seen, ahora)
+    hace_usb = _hace_segundos(dispositivo.last_seen_usb, ahora)
+
+    wifi = hace_wifi is not None and hace_wifi <= ventana
+    usb = hace_usb is not None and hace_usb <= ventana
+
+    canales = [nombre for nombre, activo in (('USB', usb), ('WiFi', wifi)) if activo]
+    ultima = max(
+        (m for m in (dispositivo.last_seen, dispositivo.last_seen_usb) if m),
+        default=None,
+    )
+    return {
+        'device_id': dispositivo.device_id,
+        'online': bool(canales),
+        'canales': canales,
+        'texto': 'Online' if canales else 'Offline',
+        'detalle': ('vía ' + ' + '.join(canales)) if canales else 'sin conexión',
+        'ip_address': dispositivo.ip_address,
+        'firmware_version': dispositivo.firmware_version,
+        'ultima_conexion': _a_hora_local(ultima),
+    }
+
+
+def _fecha_utc_reportada(valor):
+    """
+    Fecha UTC enviada por el script (ISO 8601). Se usa cuando el evento llega
+    tarde desde la cola offline; si es inválida o futura se ignora.
+    """
+    if not valor:
+        return None
+    try:
+        fecha = datetime.fromisoformat(str(valor).replace('Z', '').strip())
+    except ValueError:
+        return None
+    if fecha.tzinfo is not None:
+        fecha = fecha.replace(tzinfo=None)
+    ahora = datetime.utcnow()
+    if fecha > ahora + timedelta(minutes=5) or fecha < ahora - timedelta(days=60):
+        return None
+    return fecha
 
 
 def _ip_valida(value):
@@ -465,6 +544,8 @@ def dashboard():
         .order_by(Dispositivo.linked_at.desc())
         .all()
     )
+    ahora = datetime.utcnow()
+    estados = {d.device_id: _estado_dispositivo(d, ahora) for d in dispositivos_vinculados}
 
     return render_template(
         'dashboard.html',
@@ -472,6 +553,105 @@ def dashboard():
         detecciones=detecciones,
         pendientes_count=pendientes_count,
         dispositivos=dispositivos_vinculados,
+        estados=estados,
+    )
+
+
+@bp.route('/historial')
+@login_required
+def historial():
+    """Historial completo de detecciones con filtros y gráficos."""
+    offset = current_app.config['UTC_OFFSET']
+    dispositivos_usuario = (
+        Dispositivo.query
+        .filter_by(usuario_id=current_user.id)
+        .order_by(Dispositivo.device_id.asc())
+        .all()
+    )
+
+    filtros = {
+        'desde': request.args.get('desde', '').strip(),
+        'hasta': request.args.get('hasta', '').strip(),
+        'tipo': request.args.get('tipo', '').strip(),
+        'dispositivo': request.args.get('dispositivo', '').strip(),
+    }
+    consulta = Deteccion.query.filter(Deteccion.usuario_id == current_user.id)
+    errores = []
+
+    # Las fechas del formulario son locales; la base guarda UTC.
+    def _dia_local_a_utc(texto, nombre):
+        try:
+            return datetime.strptime(texto, '%Y-%m-%d') - offset
+        except ValueError:
+            errores.append(f'Fecha "{nombre}" inválida.')
+            return None
+
+    desde_utc = _dia_local_a_utc(filtros['desde'], 'desde') if filtros['desde'] else None
+    hasta_utc = _dia_local_a_utc(filtros['hasta'], 'hasta') if filtros['hasta'] else None
+    if desde_utc and hasta_utc and desde_utc > hasta_utc:
+        errores.append('La fecha "desde" es posterior a "hasta".')
+    if desde_utc:
+        consulta = consulta.filter(Deteccion.fecha_hora >= desde_utc)
+    if hasta_utc:
+        consulta = consulta.filter(Deteccion.fecha_hora < hasta_utc + timedelta(days=1))
+
+    if filtros['tipo'] in TIPOS_EVENTO:
+        consulta = consulta.filter(Deteccion.tipo_evento == filtros['tipo'])
+    else:
+        filtros['tipo'] = ''
+
+    ids_propios = {str(d.id) for d in dispositivos_usuario}
+    if filtros['dispositivo'] in ids_propios:
+        consulta = consulta.filter(Deteccion.dispositivo_id == int(filtros['dispositivo']))
+    else:
+        filtros['dispositivo'] = ''
+
+    total = consulta.count()
+    detecciones = (
+        consulta.order_by(Deteccion.fecha_hora.desc())
+        .limit(HISTORIAL_LIMITE)
+        .all()
+    )
+
+    # ── Datos para los gráficos (sobre todos los resultados filtrados) ──
+    por_tipo = dict(
+        consulta.with_entities(Deteccion.tipo_evento, db.func.count(Deteccion.id))
+        .group_by(Deteccion.tipo_evento)
+        .all()
+    )
+    grafico_tipos = [{'nombre': t, 'cantidad': por_tipo.get(t, 0)} for t in TIPOS_EVENTO]
+
+    # Detecciones por día: rango filtrado o, si no hay, los últimos 14 días.
+    hoy_local = (datetime.utcnow() + offset).date()
+    dia_fin = (hasta_utc + offset).date() if hasta_utc else hoy_local
+    dia_ini = (desde_utc + offset).date() if desde_utc else dia_fin - timedelta(days=13)
+    if (dia_fin - dia_ini).days > 60:
+        dia_ini = dia_fin - timedelta(days=60)
+    conteo_dias = {}
+    for (fecha,) in consulta.with_entities(Deteccion.fecha_hora).all():
+        dia = (fecha + offset).date()
+        conteo_dias[dia] = conteo_dias.get(dia, 0) + 1
+    grafico_dias = []
+    dia = dia_ini
+    while dia <= dia_fin:
+        grafico_dias.append({'etiqueta': dia.strftime('%d/%m'), 'cantidad': conteo_dias.get(dia, 0)})
+        dia += timedelta(days=1)
+
+    for error in errores:
+        flash(error, 'warning')
+
+    return render_template(
+        'historial.html',
+        detecciones=detecciones,
+        total=total,
+        limite=HISTORIAL_LIMITE,
+        filtros=filtros,
+        tipos=TIPOS_EVENTO,
+        dispositivos=dispositivos_usuario,
+        grafico_tipos=grafico_tipos,
+        max_tipo=max([g['cantidad'] for g in grafico_tipos] + [1]),
+        grafico_dias=grafico_dias,
+        max_dia=max([g['cantidad'] for g in grafico_dias] + [1]),
     )
 
 
@@ -509,6 +689,7 @@ def dispositivos():
         # Un dueño nuevo invalida cualquier config.json generado antes.
         dispositivo.api_key_hash = None
         db.session.commit()
+        cache_dispositivo(dispositivo)
         flash('Dispositivo vinculado correctamente.', 'success')
         return redirect(url_for('main.dispositivos'))
 
@@ -518,10 +699,26 @@ def dispositivos():
         .order_by(Dispositivo.linked_at.desc())
         .all()
     )
+    ahora = datetime.utcnow()
+    estados = {d.device_id: _estado_dispositivo(d, ahora) for d in vinculados}
+    # Activaciones de alarma que el propio ESP32 guardó en la base, con el
+    # canal por el que le llegó la orden (USB, WIFI, WEB o SEGURIDAD).
+    eventos = {
+        d.device_id: (
+            DispositivoEvento.query
+            .filter(DispositivoEvento.dispositivo_id == d.id)
+            .filter(DispositivoEvento.event_type.in_(ALLOWED_DEVICE_EVENTS))
+            .order_by(DispositivoEvento.created_at.desc(), DispositivoEvento.id.desc())
+            .limit(10)
+            .all()
+        )
+        for d in vinculados
+    }
     return render_template(
         'dispositivos.html',
         dispositivos=vinculados,
-        now=datetime.utcnow,
+        estados=estados,
+        eventos=eventos,
     )
 
 
@@ -545,6 +742,7 @@ def descargar_configuracion(device_id):
         value=f'usuario:{current_user.id}',
     ))
     db.session.commit()
+    cache_dispositivo(dispositivo)
 
     server_url = (current_app.config.get('VISION_PUBLIC_URL') or request.url_root).rstrip('/')
     contenido = json.dumps(
@@ -769,6 +967,52 @@ def api_esp32_commands():
     return jsonify({'status': 'ok', 'commands': payload})
 
 
+@bp.route('/api/esp32/evento', methods=['POST'])
+def api_esp32_evento():
+    """
+    El ESP32 informa cada vez que su alarma se enciende o se apaga y por qué
+    canal llegó la orden (USB, WIFI, WEB o SEGURIDAD). Es el dato que el
+    dispositivo IoT guarda en la base de datos. Viaja firmado con HMAC.
+    """
+    data = request.get_json(silent=True) or {}
+    campos = ('evento', 'canal', 'hace_ms')
+    dispositivo, error = _get_signed_device(data, include_mac=False, extra_fields=campos)
+    if not dispositivo:
+        return jsonify({'status': 'error', 'message': error}), 403
+
+    evento = str(data.get('evento', '')).strip().lower()
+    canal = str(data.get('canal', '')).strip().upper()
+    if evento not in ALLOWED_DEVICE_EVENTS or canal not in ALLOWED_DEVICE_CANALES:
+        return jsonify({'status': 'error', 'message': 'invalid_event'}), 400
+
+    try:
+        hace_ms = max(0, min(int(data.get('hace_ms', 0)), 24 * 3600 * 1000))
+    except (TypeError, ValueError):
+        hace_ms = 0
+
+    ahora = datetime.utcnow()
+    dispositivo.last_nonce = str(data.get('nonce', '')).strip()
+    dispositivo.last_seen = ahora
+    # Si el evento estuvo en cola (sin WiFi), se guarda la hora en que ocurrió.
+    db.session.add(DispositivoEvento(
+        dispositivo_id=dispositivo.id,
+        event_type=evento,
+        value=canal,
+        created_at=ahora - timedelta(milliseconds=hace_ms),
+    ))
+    db.session.commit()
+    return jsonify({'status': 'ok'})
+
+
+@bp.route('/api/hora')
+def api_hora():
+    """
+    Hora del servidor (segundos UNIX). El ESP32 la usa para firmar sus mensajes
+    cuando la red WiFi no tiene internet y no puede sincronizar por NTP.
+    """
+    return jsonify({'epoch': int(time.time())})
+
+
 @bp.route('/api/devices/<device_id>/status')
 @login_required
 def api_device_status(device_id):
@@ -777,13 +1021,42 @@ def api_device_status(device_id):
         usuario_id=current_user.id,
     ).first_or_404()
 
-    return jsonify({
-        'device_id': dispositivo.device_id,
+    estado = _estado_dispositivo(dispositivo)
+    estado.update({
         'mac': dispositivo.mac,
-        'ip_address': dispositivo.ip_address,
-        'firmware_version': dispositivo.firmware_version,
         'last_seen': dispositivo.last_seen.isoformat() if dispositivo.last_seen else None,
     })
+    return jsonify(estado)
+
+
+@bp.route('/api/panel/estado')
+@login_required
+def api_panel_estado():
+    """Estado Online/Offline de los ESP32 del usuario (la web lo consulta cada 3 s)."""
+    ahora = datetime.utcnow()
+    dispositivos_usuario = Dispositivo.query.filter_by(usuario_id=current_user.id).all()
+    return jsonify({
+        'hora_servidor': _a_hora_local(ahora),
+        'dispositivos': [_estado_dispositivo(d, ahora) for d in dispositivos_usuario],
+    })
+
+
+@bp.route('/api/devices/<device_id>/presencia', methods=['POST'])
+def api_device_presencia(device_id):
+    """
+    El programa de detección informa cada 5 s si el ESP32 le responde por el
+    cable USB. Así la web lo muestra Online aunque el ESP32 no tenga WiFi.
+    Requiere la api_key del config.json.
+    """
+    dispositivo = Dispositivo.query.filter_by(device_id=_clean_device_id(device_id)).first()
+    if not _device_api_key_valida(dispositivo, request.headers.get('X-Vision-Api-Key', '')):
+        return jsonify({'status': 'error', 'message': 'unauthorized'}), 401
+
+    data = request.get_json(silent=True) or {}
+    if data.get('usb'):
+        dispositivo.last_seen_usb = datetime.utcnow()
+        db.session.commit()
+    return jsonify({'status': 'ok'})
 
 
 @bp.route('/api/devices/<device_id>/ip')
@@ -830,46 +1103,85 @@ def api_device_command(device_id):
     return jsonify({'status': 'ok'})
 
 
+def _clave_global_valida(api_key):
+    return bool(api_key) and hmac.compare_digest(api_key, current_app.config['VISION_API_KEY'])
+
+
+def _registrar_deteccion_offline(data, api_key):
+    """
+    MySQL no respondió: se valida con la copia SQLite del dispositivo y la
+    detección queda en la cola local. El hilo sincronizador la sube a MySQL
+    apenas vuelva (lo muestra el banner "pendientes de sincronizar").
+    """
+    device_id = _clean_device_id(data.get('device_id'))
+    copia = dispositivo_desde_cache(device_id) if device_id else None
+    if not copia or not copia.usuario_id:
+        return {'status': 'error', 'message': 'mysql_offline_device_unknown'}, 503
+
+    clave_ok = _clave_global_valida(api_key) or (
+        bool(copia.api_key_hash)
+        and hmac.compare_digest(copia.api_key_hash, _hash_api_key(api_key))
+    )
+    if not clave_ok:
+        abort(401)
+
+    guardar_deteccion_offline(
+        usuario_id=copia.usuario_id,
+        tipo_evento=data['tipo_evento'],
+        video_path=data.get('video_path') or 'sin_video',
+        valor_ear=data.get('valor_ear'),
+        valor_pitch=data.get('valor_pitch'),
+        duracion_alerta=data.get('duracion_alerta'),
+        dispositivo_id=copia.dispositivo_id,
+        fecha_hora=_fecha_utc_reportada(data.get('fecha_hora_utc')),
+    )
+    return {
+        'status': 'pendiente',
+        'message': 'MySQL no disponible: deteccion guardada en la cola offline.',
+    }, 202
+
+
 @bp.route('/api/deteccion', methods=['POST'])
 def api_deteccion():
     """
     Endpoint interno para registrar detecciones desde el script de visión artificial.
+    Respuestas: 201 guardada en MySQL; 202 guardada en la cola offline (MySQL
+    caído); 4xx error del pedido (no reintentar); 5xx reintentar más tarde.
     """
     data = request.get_json(silent=True)
-
     if not data:
-        abort(401)
+        abort(400)
+    if data.get('tipo_evento') not in TIPOS_EVENTO:
+        return {'status': 'error', 'message': 'invalid_tipo_evento'}, 400
 
-    # Se acepta la clave global del servidor (uso interno, como hasta ahora) o
-    # la api_key propia del dispositivo, que solo autoriza a ese device_id.
+    # Se acepta la clave global del servidor (uso interno) o la api_key propia
+    # del dispositivo, que solo autoriza a ese device_id.
     api_key = str(data.get('api_key') or '')
-    clave_global_ok = bool(api_key) and hmac.compare_digest(
-        api_key, current_app.config['VISION_API_KEY']
-    )
-    if not clave_global_ok:
-        device_id_auth = _clean_device_id(data.get('device_id'))
-        dispositivo_auth = (
-            Dispositivo.query.filter_by(device_id=device_id_auth).first()
-            if device_id_auth else None
-        )
-        if not _device_api_key_valida(dispositivo_auth, api_key):
-            abort(401)
+    device_id = _clean_device_id(data.get('device_id'))
 
     try:
-        device_id = _clean_device_id(data.get('device_id'))
-        dispositivo = None
-        usuario_id = data.get('usuario_id')
+        dispositivo = (
+            Dispositivo.query.filter_by(device_id=device_id).first() if device_id else None
+        )
+    except Exception as exc:
+        db.session.rollback()
+        logger.warning(f'[API] MySQL no responde al registrar deteccion: {exc}')
+        return _registrar_deteccion_offline(data, api_key)
 
-        if device_id:
-            dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
-            if not dispositivo:
-                return {'status': 'error', 'message': 'device_not_registered'}, 404
-            if not dispositivo.usuario_id:
-                return {'status': 'error', 'message': 'device_not_linked'}, 409
-            usuario_id = dispositivo.usuario_id
-        elif not usuario_id:
-            return {'status': 'error', 'message': 'missing_usuario_or_device'}, 400
+    if not _clave_global_valida(api_key) and not _device_api_key_valida(dispositivo, api_key):
+        abort(401)
 
+    usuario_id = data.get('usuario_id')
+    if device_id:
+        if not dispositivo:
+            return {'status': 'error', 'message': 'device_not_registered'}, 404
+        if not dispositivo.usuario_id:
+            return {'status': 'error', 'message': 'device_not_linked'}, 409
+        usuario_id = dispositivo.usuario_id
+    elif not usuario_id:
+        return {'status': 'error', 'message': 'missing_usuario_or_device'}, 400
+
+    try:
         det, stats = registrar_deteccion_mysql(
             usuario_id=int(usuario_id),
             tipo_evento=data['tipo_evento'],
@@ -877,6 +1189,8 @@ def api_deteccion():
             valor_ear=data.get('valor_ear'),
             valor_pitch=data.get('valor_pitch'),
             duracion_alerta=data.get('duracion_alerta'),
+            dispositivo_id=dispositivo.id if dispositivo else None,
+            fecha_hora=_fecha_utc_reportada(data.get('fecha_hora_utc')),
         )
 
         if dispositivo:
@@ -886,19 +1200,22 @@ def api_deteccion():
                 value=data['tipo_evento'],
             ))
             db.session.commit()
-
-        return {
-            'status': 'ok',
-            'message': 'Deteccion guardada en MySQL.',
-            'deteccion_id': det.id,
-            'usuario_id': int(usuario_id),
-            'total_eventos': stats.total_eventos,
-            'score_conduccion': stats.score_conduccion,
-        }, 201
+            cache_dispositivo(dispositivo)
     except Exception as e:
         db.session.rollback()
         logger.error(f'[API] Error al guardar detección: {e}')
+        if not mysql_disponible():
+            return _registrar_deteccion_offline(data, api_key)
         return {'status': 'error', 'message': str(e)}, 500
+
+    return {
+        'status': 'ok',
+        'message': 'Deteccion guardada en MySQL.',
+        'deteccion_id': det.id,
+        'usuario_id': int(usuario_id),
+        'total_eventos': stats.total_eventos,
+        'score_conduccion': stats.score_conduccion,
+    }, 201
 
 
 def _reset_token(email):

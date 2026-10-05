@@ -1,0 +1,2415 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..aaf6201
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,11 @@
++# Copiar como .env y completar. Nunca subir el .env al repositorio.
++SECRET_KEY=cambiar-por-una-clave-larga-y-aleatoria
++MAIL_USERNAME=correo@gmail.com
++MAIL_PASSWORD=contraseña-de-aplicacion-de-gmail
++MP_ACCESS_TOKEN=
++MP_PUBLIC_KEY=
++# Opcionales
++# MYSQL_USER=root
++# MYSQL_PASSWORD=
++# MYSQL_DB=vision_db
++# VISION_PUBLIC_URL=http://192.168.1.100:5050
+diff --git a/.gitignore b/.gitignore
+index feb54df..ebd796e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -10,3 +10,9 @@ iniciar_vision.bat
+ # Configuración local con secretos (no subir)
+ config.json
+ esp32_alerta_wifi/config_dispositivo.h
++
++# Base de datos offline (SQLite) del programa de detección
++vision_pendientes.db
++
++# Secretos locales (copiar .env.example como .env)
++.env
+diff --git a/app/__init__.py b/app/__init__.py
+index 92185bd..102b976 100644
+--- a/app/__init__.py
++++ b/app/__init__.py
+@@ -1,5 +1,7 @@
+ import logging
+ import os
++import time
++from datetime import timedelta
+ from pathlib import Path
+ 
+ from flask import Flask
+@@ -74,13 +76,23 @@ def create_app():
+     app.config['VISION_PUBLIC_URL'] = os.environ.get('VISION_PUBLIC_URL', '')
+     app.config['MP_ACCESS_TOKEN'] = os.environ.get('MP_ACCESS_TOKEN', '')
+     app.config['MP_PUBLIC_KEY'] = os.environ.get('MP_PUBLIC_KEY', '')
+-    app.config['SQLALCHEMY_DATABASE_URI'] = mysql_uri
++    # DATABASE_URL permite usar otra base (por ejemplo SQLite para pruebas);
++    # si no se define se usa el MySQL de XAMPP como siempre.
++    database_url = os.environ.get('DATABASE_URL', '').strip()
++    app.config['SQLALCHEMY_DATABASE_URI'] = database_url or mysql_uri
+     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+-        'pool_pre_ping': True,
+-        'pool_recycle': 300,
+-        'connect_args': {'connect_timeout': 5},
+-    }
++    if not database_url:
++        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
++            'pool_pre_ping': True,
++            'pool_recycle': 300,
++            'connect_args': {'connect_timeout': 5},
++        }
++
++    # La base guarda las fechas en UTC; la web las muestra en hora argentina
++    # (UTC-3, sin horario de verano). Se puede cambiar con VISION_UTC_OFFSET_HORAS.
++    app.config['UTC_OFFSET'] = timedelta(
++        hours=float(os.environ.get('VISION_UTC_OFFSET_HORAS', '-3'))
++    )
+     app.config['OFFLINE_SQLITE_URI'] = os.environ.get(
+         'OFFLINE_SQLITE_URI',
+         _default_offline_sqlite_uri(),
+@@ -100,7 +112,29 @@ def create_app():
+     login_manager.init_app(app)
+     mail.init_app(app)          # ← ahora va junto con las otras extensiones
+ 
+-    from .models import Usuario
++    from .models import Usuario, verificar_esquema
++
++    @app.template_filter('hora_local')
++    def hora_local(valor, formato='%d/%m/%Y %H:%M:%S'):
++        """Convierte una fecha UTC de la base a hora local para mostrarla."""
++        if not valor:
++            return '—'
++        return (valor + app.config['UTC_OFFSET']).strftime(formato)
++
++    reintento_esquema = {'proximo': 0.0}
++
++    @app.before_request
++    def _esquema_al_dia():
++        # Si MySQL no responde se ignora (las rutas ya manejan el modo offline)
++        # y no se vuelve a probar hasta dentro de 30 s, para no demorar cada página.
++        ahora = time.monotonic()
++        if ahora < reintento_esquema['proximo']:
++            return
++        try:
++            verificar_esquema()
++        except Exception:
++            db.session.rollback()
++            reintento_esquema['proximo'] = ahora + 30.0
+ 
+     @login_manager.user_loader
+     def load_user(uid):
+diff --git a/app/controllers.py b/app/controllers.py
+index 64db9fd..47ca31d 100644
+--- a/app/controllers.py
++++ b/app/controllers.py
+@@ -37,7 +37,9 @@ from .models import (
+     Usuario,
+ )
+ from .services import (
++    cache_dispositivo,
+     contar_pendientes_usuario,
++    dispositivo_desde_cache,
+     guardar_deteccion_offline,
+     mysql_disponible,
+     registrar_deteccion_mysql,
+@@ -49,8 +51,17 @@ bp = Blueprint('main', __name__)
+ DEFAULT_USER_ROLE = 'Usuario común'
+ DEFAULT_ROLES = ('Administrador', DEFAULT_USER_ROLE)
+ DEVICE_SIGNATURE_TTL_SECONDS = 300
++# Para VINCULAR se acepta un heartbeat de hasta 10 minutos de antigüedad.
+ DEVICE_ONLINE_WINDOW_MINUTES = 10
++# Para mostrar Online/Offline: el ESP32 consulta comandos cada 5 s y el
++# programa de detección informa el USB cada 5 s, así que 20 s de silencio
++# significan que se desconectó.
++DEVICE_STATUS_WINDOW_SECONDS = 20
+ ALLOWED_DEVICE_COMMANDS = {'alert_on', 'alert_off'}
++ALLOWED_DEVICE_EVENTS = {'alarma_on', 'alarma_off'}
++ALLOWED_DEVICE_CANALES = {'USB', 'WIFI', 'WEB', 'SEGURIDAD'}
++TIPOS_EVENTO = ('Ojos Cerrados', 'Cabeceo', 'Ambos')
++HISTORIAL_LIMITE = 300
+ 
+ # Producto único simulado para el checkout de Mercado Pago
+ PRODUCTO_VISION = {
+@@ -124,7 +135,7 @@ def _clean_device_id(value):
+     return (value or '').strip().upper()
+ 
+ 
+-def _device_payload(data, include_mac=False):
++def _device_payload(data, include_mac=False, extra_fields=()):
+     parts = [
+         _clean_device_id(data.get('device_id')),
+         str(data.get('ts', '')).strip(),
+@@ -132,10 +143,13 @@ def _device_payload(data, include_mac=False):
+     ]
+     if include_mac:
+         parts.insert(1, str(data.get('mac', '')).strip().upper())
++    # Campos propios del mensaje (por ejemplo el evento de alarma) también se
++    # firman, para que nadie pueda alterarlos en el camino.
++    parts.extend(str(data.get(campo, '')).strip() for campo in extra_fields)
+     return '|'.join(parts)
+ 
+ 
+-def _verify_device_signature(data, dispositivo, include_mac=False):
++def _verify_device_signature(data, dispositivo, include_mac=False, extra_fields=()):
+     signature = str(data.get('signature', '')).strip().lower()
+     ts = str(data.get('ts', '')).strip()
+     nonce = str(data.get('nonce', '')).strip()
+@@ -156,7 +170,7 @@ def _verify_device_signature(data, dispositivo, include_mac=False):
+ 
+     expected = hmac.new(
+         dispositivo.device_secret.encode('utf-8'),
+-        _device_payload(data, include_mac=include_mac).encode('utf-8'),
++        _device_payload(data, include_mac=include_mac, extra_fields=extra_fields).encode('utf-8'),
+         hashlib.sha256,
+     ).hexdigest()
+ 
+@@ -166,14 +180,16 @@ def _verify_device_signature(data, dispositivo, include_mac=False):
+     return True, ''
+ 
+ 
+-def _get_signed_device(data, include_mac=False):
++def _get_signed_device(data, include_mac=False, extra_fields=()):
+     device_id = _clean_device_id(data.get('device_id'))
+     dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+ 
+     if not dispositivo:
+         return None, 'device_not_registered'
+ 
+-    ok, error = _verify_device_signature(data, dispositivo, include_mac=include_mac)
++    ok, error = _verify_device_signature(
++        data, dispositivo, include_mac=include_mac, extra_fields=extra_fields
++    )
+     if not ok:
+         return None, error
+ 
+@@ -191,6 +207,69 @@ def _device_api_key_valida(dispositivo, api_key):
+     return hmac.compare_digest(dispositivo.api_key_hash, _hash_api_key(str(api_key)))
+ 
+ 
++def _hace_segundos(momento, ahora):
++    if not momento:
++        return None
++    return (ahora - momento).total_seconds()
++
++
++def _a_hora_local(momento, formato='%d/%m/%Y %H:%M:%S'):
++    if not momento:
++        return None
++    return (momento + current_app.config['UTC_OFFSET']).strftime(formato)
++
++
++def _estado_dispositivo(dispositivo, ahora=None):
++    """
++    Estado en vivo de un ESP32, combinando las dos fuentes:
++    - WiFi: el propio ESP32 actualiza last_seen (heartbeat y consulta de comandos).
++    - USB: el programa de detección informa que el ESP32 le responde por cable.
++    """
++    ahora = ahora or datetime.utcnow()
++    ventana = DEVICE_STATUS_WINDOW_SECONDS
++
++    hace_wifi = _hace_segundos(dispositivo.last_seen, ahora)
++    hace_usb = _hace_segundos(dispositivo.last_seen_usb, ahora)
++
++    wifi = hace_wifi is not None and hace_wifi <= ventana
++    usb = hace_usb is not None and hace_usb <= ventana
++
++    canales = [nombre for nombre, activo in (('USB', usb), ('WiFi', wifi)) if activo]
++    ultima = max(
++        (m for m in (dispositivo.last_seen, dispositivo.last_seen_usb) if m),
++        default=None,
++    )
++    return {
++        'device_id': dispositivo.device_id,
++        'online': bool(canales),
++        'canales': canales,
++        'texto': 'Online' if canales else 'Offline',
++        'detalle': ('vía ' + ' + '.join(canales)) if canales else 'sin conexión',
++        'ip_address': dispositivo.ip_address,
++        'firmware_version': dispositivo.firmware_version,
++        'ultima_conexion': _a_hora_local(ultima),
++    }
++
++
++def _fecha_utc_reportada(valor):
++    """
++    Fecha UTC enviada por el script (ISO 8601). Se usa cuando el evento llega
++    tarde desde la cola offline; si es inválida o futura se ignora.
++    """
++    if not valor:
++        return None
++    try:
++        fecha = datetime.fromisoformat(str(valor).replace('Z', '').strip())
++    except ValueError:
++        return None
++    if fecha.tzinfo is not None:
++        fecha = fecha.replace(tzinfo=None)
++    ahora = datetime.utcnow()
++    if fecha > ahora + timedelta(minutes=5) or fecha < ahora - timedelta(days=60):
++        return None
++    return fecha
++
++
+ def _ip_valida(value):
+     try:
+         return str(ipaddress.ip_address(str(value or '').strip()))
+@@ -465,6 +544,8 @@ def dashboard():
+         .order_by(Dispositivo.linked_at.desc())
+         .all()
+     )
++    ahora = datetime.utcnow()
++    estados = {d.device_id: _estado_dispositivo(d, ahora) for d in dispositivos_vinculados}
+ 
+     return render_template(
+         'dashboard.html',
+@@ -472,6 +553,105 @@ def dashboard():
+         detecciones=detecciones,
+         pendientes_count=pendientes_count,
+         dispositivos=dispositivos_vinculados,
++        estados=estados,
++    )
++
++
++@bp.route('/historial')
++@login_required
++def historial():
++    """Historial completo de detecciones con filtros y gráficos."""
++    offset = current_app.config['UTC_OFFSET']
++    dispositivos_usuario = (
++        Dispositivo.query
++        .filter_by(usuario_id=current_user.id)
++        .order_by(Dispositivo.device_id.asc())
++        .all()
++    )
++
++    filtros = {
++        'desde': request.args.get('desde', '').strip(),
++        'hasta': request.args.get('hasta', '').strip(),
++        'tipo': request.args.get('tipo', '').strip(),
++        'dispositivo': request.args.get('dispositivo', '').strip(),
++    }
++    consulta = Deteccion.query.filter(Deteccion.usuario_id == current_user.id)
++    errores = []
++
++    # Las fechas del formulario son locales; la base guarda UTC.
++    def _dia_local_a_utc(texto, nombre):
++        try:
++            return datetime.strptime(texto, '%Y-%m-%d') - offset
++        except ValueError:
++            errores.append(f'Fecha "{nombre}" inválida.')
++            return None
++
++    desde_utc = _dia_local_a_utc(filtros['desde'], 'desde') if filtros['desde'] else None
++    hasta_utc = _dia_local_a_utc(filtros['hasta'], 'hasta') if filtros['hasta'] else None
++    if desde_utc and hasta_utc and desde_utc > hasta_utc:
++        errores.append('La fecha "desde" es posterior a "hasta".')
++    if desde_utc:
++        consulta = consulta.filter(Deteccion.fecha_hora >= desde_utc)
++    if hasta_utc:
++        consulta = consulta.filter(Deteccion.fecha_hora < hasta_utc + timedelta(days=1))
++
++    if filtros['tipo'] in TIPOS_EVENTO:
++        consulta = consulta.filter(Deteccion.tipo_evento == filtros['tipo'])
++    else:
++        filtros['tipo'] = ''
++
++    ids_propios = {str(d.id) for d in dispositivos_usuario}
++    if filtros['dispositivo'] in ids_propios:
++        consulta = consulta.filter(Deteccion.dispositivo_id == int(filtros['dispositivo']))
++    else:
++        filtros['dispositivo'] = ''
++
++    total = consulta.count()
++    detecciones = (
++        consulta.order_by(Deteccion.fecha_hora.desc())
++        .limit(HISTORIAL_LIMITE)
++        .all()
++    )
++
++    # ── Datos para los gráficos (sobre todos los resultados filtrados) ──
++    por_tipo = dict(
++        consulta.with_entities(Deteccion.tipo_evento, db.func.count(Deteccion.id))
++        .group_by(Deteccion.tipo_evento)
++        .all()
++    )
++    grafico_tipos = [{'nombre': t, 'cantidad': por_tipo.get(t, 0)} for t in TIPOS_EVENTO]
++
++    # Detecciones por día: rango filtrado o, si no hay, los últimos 14 días.
++    hoy_local = (datetime.utcnow() + offset).date()
++    dia_fin = (hasta_utc + offset).date() if hasta_utc else hoy_local
++    dia_ini = (desde_utc + offset).date() if desde_utc else dia_fin - timedelta(days=13)
++    if (dia_fin - dia_ini).days > 60:
++        dia_ini = dia_fin - timedelta(days=60)
++    conteo_dias = {}
++    for (fecha,) in consulta.with_entities(Deteccion.fecha_hora).all():
++        dia = (fecha + offset).date()
++        conteo_dias[dia] = conteo_dias.get(dia, 0) + 1
++    grafico_dias = []
++    dia = dia_ini
++    while dia <= dia_fin:
++        grafico_dias.append({'etiqueta': dia.strftime('%d/%m'), 'cantidad': conteo_dias.get(dia, 0)})
++        dia += timedelta(days=1)
++
++    for error in errores:
++        flash(error, 'warning')
++
++    return render_template(
++        'historial.html',
++        detecciones=detecciones,
++        total=total,
++        limite=HISTORIAL_LIMITE,
++        filtros=filtros,
++        tipos=TIPOS_EVENTO,
++        dispositivos=dispositivos_usuario,
++        grafico_tipos=grafico_tipos,
++        max_tipo=max([g['cantidad'] for g in grafico_tipos] + [1]),
++        grafico_dias=grafico_dias,
++        max_dia=max([g['cantidad'] for g in grafico_dias] + [1]),
+     )
+ 
+ 
+@@ -509,6 +689,7 @@ def dispositivos():
+         # Un dueño nuevo invalida cualquier config.json generado antes.
+         dispositivo.api_key_hash = None
+         db.session.commit()
++        cache_dispositivo(dispositivo)
+         flash('Dispositivo vinculado correctamente.', 'success')
+         return redirect(url_for('main.dispositivos'))
+ 
+@@ -518,10 +699,26 @@ def dispositivos():
+         .order_by(Dispositivo.linked_at.desc())
+         .all()
+     )
++    ahora = datetime.utcnow()
++    estados = {d.device_id: _estado_dispositivo(d, ahora) for d in vinculados}
++    # Activaciones de alarma que el propio ESP32 guardó en la base, con el
++    # canal por el que le llegó la orden (USB, WIFI, WEB o SEGURIDAD).
++    eventos = {
++        d.device_id: (
++            DispositivoEvento.query
++            .filter(DispositivoEvento.dispositivo_id == d.id)
++            .filter(DispositivoEvento.event_type.in_(ALLOWED_DEVICE_EVENTS))
++            .order_by(DispositivoEvento.created_at.desc(), DispositivoEvento.id.desc())
++            .limit(10)
++            .all()
++        )
++        for d in vinculados
++    }
+     return render_template(
+         'dispositivos.html',
+         dispositivos=vinculados,
+-        now=datetime.utcnow,
++        estados=estados,
++        eventos=eventos,
+     )
+ 
+ 
+@@ -545,6 +742,7 @@ def descargar_configuracion(device_id):
+         value=f'usuario:{current_user.id}',
+     ))
+     db.session.commit()
++    cache_dispositivo(dispositivo)
+ 
+     server_url = (current_app.config.get('VISION_PUBLIC_URL') or request.url_root).rstrip('/')
+     contenido = json.dumps(
+@@ -769,6 +967,52 @@ def api_esp32_commands():
+     return jsonify({'status': 'ok', 'commands': payload})
+ 
+ 
++@bp.route('/api/esp32/evento', methods=['POST'])
++def api_esp32_evento():
++    """
++    El ESP32 informa cada vez que su alarma se enciende o se apaga y por qué
++    canal llegó la orden (USB, WIFI, WEB o SEGURIDAD). Es el dato que el
++    dispositivo IoT guarda en la base de datos. Viaja firmado con HMAC.
++    """
++    data = request.get_json(silent=True) or {}
++    campos = ('evento', 'canal', 'hace_ms')
++    dispositivo, error = _get_signed_device(data, include_mac=False, extra_fields=campos)
++    if not dispositivo:
++        return jsonify({'status': 'error', 'message': error}), 403
++
++    evento = str(data.get('evento', '')).strip().lower()
++    canal = str(data.get('canal', '')).strip().upper()
++    if evento not in ALLOWED_DEVICE_EVENTS or canal not in ALLOWED_DEVICE_CANALES:
++        return jsonify({'status': 'error', 'message': 'invalid_event'}), 400
++
++    try:
++        hace_ms = max(0, min(int(data.get('hace_ms', 0)), 24 * 3600 * 1000))
++    except (TypeError, ValueError):
++        hace_ms = 0
++
++    ahora = datetime.utcnow()
++    dispositivo.last_nonce = str(data.get('nonce', '')).strip()
++    dispositivo.last_seen = ahora
++    # Si el evento estuvo en cola (sin WiFi), se guarda la hora en que ocurrió.
++    db.session.add(DispositivoEvento(
++        dispositivo_id=dispositivo.id,
++        event_type=evento,
++        value=canal,
++        created_at=ahora - timedelta(milliseconds=hace_ms),
++    ))
++    db.session.commit()
++    return jsonify({'status': 'ok'})
++
++
++@bp.route('/api/hora')
++def api_hora():
++    """
++    Hora del servidor (segundos UNIX). El ESP32 la usa para firmar sus mensajes
++    cuando la red WiFi no tiene internet y no puede sincronizar por NTP.
++    """
++    return jsonify({'epoch': int(time.time())})
++
++
+ @bp.route('/api/devices/<device_id>/status')
+ @login_required
+ def api_device_status(device_id):
+@@ -777,13 +1021,42 @@ def api_device_status(device_id):
+         usuario_id=current_user.id,
+     ).first_or_404()
+ 
+-    return jsonify({
+-        'device_id': dispositivo.device_id,
++    estado = _estado_dispositivo(dispositivo)
++    estado.update({
+         'mac': dispositivo.mac,
+-        'ip_address': dispositivo.ip_address,
+-        'firmware_version': dispositivo.firmware_version,
+         'last_seen': dispositivo.last_seen.isoformat() if dispositivo.last_seen else None,
+     })
++    return jsonify(estado)
++
++
++@bp.route('/api/panel/estado')
++@login_required
++def api_panel_estado():
++    """Estado Online/Offline de los ESP32 del usuario (la web lo consulta cada 3 s)."""
++    ahora = datetime.utcnow()
++    dispositivos_usuario = Dispositivo.query.filter_by(usuario_id=current_user.id).all()
++    return jsonify({
++        'hora_servidor': _a_hora_local(ahora),
++        'dispositivos': [_estado_dispositivo(d, ahora) for d in dispositivos_usuario],
++    })
++
++
++@bp.route('/api/devices/<device_id>/presencia', methods=['POST'])
++def api_device_presencia(device_id):
++    """
++    El programa de detección informa cada 5 s si el ESP32 le responde por el
++    cable USB. Así la web lo muestra Online aunque el ESP32 no tenga WiFi.
++    Requiere la api_key del config.json.
++    """
++    dispositivo = Dispositivo.query.filter_by(device_id=_clean_device_id(device_id)).first()
++    if not _device_api_key_valida(dispositivo, request.headers.get('X-Vision-Api-Key', '')):
++        return jsonify({'status': 'error', 'message': 'unauthorized'}), 401
++
++    data = request.get_json(silent=True) or {}
++    if data.get('usb'):
++        dispositivo.last_seen_usb = datetime.utcnow()
++        db.session.commit()
++    return jsonify({'status': 'ok'})
+ 
+ 
+ @bp.route('/api/devices/<device_id>/ip')
+@@ -830,46 +1103,85 @@ def api_device_command(device_id):
+     return jsonify({'status': 'ok'})
+ 
+ 
++def _clave_global_valida(api_key):
++    return bool(api_key) and hmac.compare_digest(api_key, current_app.config['VISION_API_KEY'])
++
++
++def _registrar_deteccion_offline(data, api_key):
++    """
++    MySQL no respondió: se valida con la copia SQLite del dispositivo y la
++    detección queda en la cola local. El hilo sincronizador la sube a MySQL
++    apenas vuelva (lo muestra el banner "pendientes de sincronizar").
++    """
++    device_id = _clean_device_id(data.get('device_id'))
++    copia = dispositivo_desde_cache(device_id) if device_id else None
++    if not copia or not copia.usuario_id:
++        return {'status': 'error', 'message': 'mysql_offline_device_unknown'}, 503
++
++    clave_ok = _clave_global_valida(api_key) or (
++        bool(copia.api_key_hash)
++        and hmac.compare_digest(copia.api_key_hash, _hash_api_key(api_key))
++    )
++    if not clave_ok:
++        abort(401)
++
++    guardar_deteccion_offline(
++        usuario_id=copia.usuario_id,
++        tipo_evento=data['tipo_evento'],
++        video_path=data.get('video_path') or 'sin_video',
++        valor_ear=data.get('valor_ear'),
++        valor_pitch=data.get('valor_pitch'),
++        duracion_alerta=data.get('duracion_alerta'),
++        dispositivo_id=copia.dispositivo_id,
++        fecha_hora=_fecha_utc_reportada(data.get('fecha_hora_utc')),
++    )
++    return {
++        'status': 'pendiente',
++        'message': 'MySQL no disponible: deteccion guardada en la cola offline.',
++    }, 202
++
++
+ @bp.route('/api/deteccion', methods=['POST'])
+ def api_deteccion():
+     """
+     Endpoint interno para registrar detecciones desde el script de visión artificial.
++    Respuestas: 201 guardada en MySQL; 202 guardada en la cola offline (MySQL
++    caído); 4xx error del pedido (no reintentar); 5xx reintentar más tarde.
+     """
+     data = request.get_json(silent=True)
+-
+     if not data:
+-        abort(401)
++        abort(400)
++    if data.get('tipo_evento') not in TIPOS_EVENTO:
++        return {'status': 'error', 'message': 'invalid_tipo_evento'}, 400
+ 
+-    # Se acepta la clave global del servidor (uso interno, como hasta ahora) o
+-    # la api_key propia del dispositivo, que solo autoriza a ese device_id.
++    # Se acepta la clave global del servidor (uso interno) o la api_key propia
++    # del dispositivo, que solo autoriza a ese device_id.
+     api_key = str(data.get('api_key') or '')
+-    clave_global_ok = bool(api_key) and hmac.compare_digest(
+-        api_key, current_app.config['VISION_API_KEY']
+-    )
+-    if not clave_global_ok:
+-        device_id_auth = _clean_device_id(data.get('device_id'))
+-        dispositivo_auth = (
+-            Dispositivo.query.filter_by(device_id=device_id_auth).first()
+-            if device_id_auth else None
+-        )
+-        if not _device_api_key_valida(dispositivo_auth, api_key):
+-            abort(401)
++    device_id = _clean_device_id(data.get('device_id'))
+ 
+     try:
+-        device_id = _clean_device_id(data.get('device_id'))
+-        dispositivo = None
+-        usuario_id = data.get('usuario_id')
+-
+-        if device_id:
+-            dispositivo = Dispositivo.query.filter_by(device_id=device_id).first()
+-            if not dispositivo:
+-                return {'status': 'error', 'message': 'device_not_registered'}, 404
+-            if not dispositivo.usuario_id:
+-                return {'status': 'error', 'message': 'device_not_linked'}, 409
+-            usuario_id = dispositivo.usuario_id
+-        elif not usuario_id:
+-            return {'status': 'error', 'message': 'missing_usuario_or_device'}, 400
++        dispositivo = (
++            Dispositivo.query.filter_by(device_id=device_id).first() if device_id else None
++        )
++    except Exception as exc:
++        db.session.rollback()
++        logger.warning(f'[API] MySQL no responde al registrar deteccion: {exc}')
++        return _registrar_deteccion_offline(data, api_key)
++
++    if not _clave_global_valida(api_key) and not _device_api_key_valida(dispositivo, api_key):
++        abort(401)
+ 
++    usuario_id = data.get('usuario_id')
++    if device_id:
++        if not dispositivo:
++            return {'status': 'error', 'message': 'device_not_registered'}, 404
++        if not dispositivo.usuario_id:
++            return {'status': 'error', 'message': 'device_not_linked'}, 409
++        usuario_id = dispositivo.usuario_id
++    elif not usuario_id:
++        return {'status': 'error', 'message': 'missing_usuario_or_device'}, 400
++
++    try:
+         det, stats = registrar_deteccion_mysql(
+             usuario_id=int(usuario_id),
+             tipo_evento=data['tipo_evento'],
+@@ -877,6 +1189,8 @@ def api_deteccion():
+             valor_ear=data.get('valor_ear'),
+             valor_pitch=data.get('valor_pitch'),
+             duracion_alerta=data.get('duracion_alerta'),
++            dispositivo_id=dispositivo.id if dispositivo else None,
++            fecha_hora=_fecha_utc_reportada(data.get('fecha_hora_utc')),
+         )
+ 
+         if dispositivo:
+@@ -886,20 +1200,23 @@ def api_deteccion():
+                 value=data['tipo_evento'],
+             ))
+             db.session.commit()
+-
+-        return {
+-            'status': 'ok',
+-            'message': 'Deteccion guardada en MySQL.',
+-            'deteccion_id': det.id,
+-            'usuario_id': int(usuario_id),
+-            'total_eventos': stats.total_eventos,
+-            'score_conduccion': stats.score_conduccion,
+-        }, 201
++            cache_dispositivo(dispositivo)
+     except Exception as e:
+         db.session.rollback()
+         logger.error(f'[API] Error al guardar detección: {e}')
++        if not mysql_disponible():
++            return _registrar_deteccion_offline(data, api_key)
+         return {'status': 'error', 'message': str(e)}, 500
+ 
++    return {
++        'status': 'ok',
++        'message': 'Deteccion guardada en MySQL.',
++        'deteccion_id': det.id,
++        'usuario_id': int(usuario_id),
++        'total_eventos': stats.total_eventos,
++        'score_conduccion': stats.score_conduccion,
++    }, 201
++
+ 
+ def _reset_token(email):
+     serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+diff --git a/app/models.py b/app/models.py
+index 199aea6..edc8e97 100644
+--- a/app/models.py
++++ b/app/models.py
+@@ -88,6 +88,15 @@ class Deteccion(db.Model):
+     valor_ear = db.Column(db.Float)
+     valor_pitch = db.Column(db.Float)
+     duracion_alerta = db.Column(db.Float)
++    # ESP32 desde el que se reportó el evento (permite filtrar el historial
++    # por dispositivo). Queda en NULL en los registros anteriores a este campo.
++    dispositivo_id = db.Column(
++        db.Integer,
++        db.ForeignKey('dispositivos.id', ondelete='SET NULL'),
++        nullable=True,
++    )
++
++    dispositivo = db.relationship('Dispositivo')
+ 
+ 
+ class EstadisticaSeguridad(db.Model):
+@@ -131,21 +140,62 @@ class Dispositivo(db.Model):
+     # Se regenera en cada descarga de configuración y se borra al revincular.
+     api_key_hash = db.Column(db.String(64))
+ 
++    # Última vez que el programa de detección de la notebook informó que el
++    # ESP32 le responde por el cable USB (para el estado Online/Offline).
++    last_seen_usb = db.Column(db.DateTime)
+ 
+-def asegurar_columnas_dispositivos():
++
++# Columnas agregadas después de la primera versión de cada tabla.
++# db.create_all() no modifica tablas existentes, así que se agregan a mano.
++COLUMNAS_NUEVAS = {
++    'dispositivos': {
++        'api_key_hash': 'VARCHAR(64) NULL',
++        'last_seen_usb': 'DATETIME NULL',
++    },
++    'detecciones': {
++        'dispositivo_id': 'INT NULL',
++    },
++}
++
++
++def asegurar_columnas():
+     """
+-    db.create_all() no agrega columnas a tablas existentes: agrega las que
+-    falten en `dispositivos` para no romper instalaciones previas.
+-    Debe llamarse dentro de un app_context.
++    Agrega las columnas que falten en tablas creadas con versiones anteriores
++    del proyecto, para no tener que borrar la base. Debe llamarse dentro de
++    un app_context.
+     """
+     inspector = db.inspect(db.engine)
+-    if 'dispositivos' not in inspector.get_table_names():
+-        return
++    tablas = set(inspector.get_table_names())
+ 
+-    columnas = {col['name'] for col in inspector.get_columns('dispositivos')}
+-    if 'api_key_hash' not in columnas:
+-        with db.engine.begin() as conn:
+-            conn.execute(db.text('ALTER TABLE dispositivos ADD COLUMN api_key_hash VARCHAR(64) NULL'))
++    for tabla, columnas in COLUMNAS_NUEVAS.items():
++        if tabla not in tablas:
++            continue
++        existentes = {col['name'] for col in inspector.get_columns(tabla)}
++        for nombre, definicion in columnas.items():
++            if nombre in existentes:
++                continue
++            with db.engine.begin() as conn:
++                conn.execute(db.text(f'ALTER TABLE {tabla} ADD COLUMN {nombre} {definicion}'))
++
++
++# Nombre anterior, se mantiene por compatibilidad con scripts viejos.
++asegurar_columnas_dispositivos = asegurar_columnas
++
++_esquema_verificado = False
++
++
++def verificar_esquema():
++    """
++    Crea tablas y agrega columnas faltantes una sola vez por proceso.
++    Si MySQL no está disponible lanza la excepción y se reintenta en la
++    siguiente request (así funciona aunque XAMPP se inicie después que Flask).
++    """
++    global _esquema_verificado
++    if _esquema_verificado:
++        return
++    db.create_all()
++    asegurar_columnas()
++    _esquema_verificado = True
+ 
+ 
+ class DispositivoEvento(db.Model):
+diff --git a/app/services.py b/app/services.py
+index 2795c7c..af287df 100644
+--- a/app/services.py
++++ b/app/services.py
+@@ -38,6 +38,18 @@ detecciones_pending = Table(
+     Column('duracion_alerta', Float),
+     Column('sincronizado', Boolean, default=False),
+     Column('mysql_id', Integer),
++    Column('dispositivo_id', Integer),
++)
++
++# Copia mínima de cada dispositivo vinculado, para poder aceptar detecciones
++# (validar la api_key y saber a qué usuario pertenecen) aunque MySQL esté caído.
++dispositivos_cache = Table(
++    'dispositivos_cache',
++    _offline_meta,
++    Column('device_id', String(64), primary_key=True),
++    Column('dispositivo_id', Integer, nullable=False),
++    Column('usuario_id', Integer),
++    Column('api_key_hash', String(64)),
+ )
+ 
+ usuarios_cache = Table(
+@@ -64,6 +76,12 @@ def init_offline_storage(app):
+     )
+     _offline_meta.create_all(_offline_engine)
+ 
++    # create_all no agrega columnas a tablas SQLite ya existentes.
++    with _offline_engine.begin() as conn:
++        columnas = {fila[1] for fila in conn.execute(text('PRAGMA table_info(detecciones_pending)'))}
++        if 'dispositivo_id' not in columnas:
++            conn.execute(text('ALTER TABLE detecciones_pending ADD COLUMN dispositivo_id INTEGER'))
++
+ 
+ def _engine():
+     if _offline_engine is None:
+@@ -100,6 +118,42 @@ def cache_usuario(u):
+         conn.commit()
+ 
+ 
++def cache_dispositivo(dispositivo):
++    """Actualiza la copia SQLite de un dispositivo (se llama cuando MySQL anda)."""
++    datos = {
++        'dispositivo_id': dispositivo.id,
++        'usuario_id': dispositivo.usuario_id,
++        'api_key_hash': dispositivo.api_key_hash,
++    }
++    try:
++        with _engine().begin() as conn:
++            existe = conn.execute(
++                dispositivos_cache.select().where(
++                    dispositivos_cache.c.device_id == dispositivo.device_id
++                )
++            ).fetchone()
++            if existe:
++                conn.execute(
++                    dispositivos_cache.update()
++                    .where(dispositivos_cache.c.device_id == dispositivo.device_id)
++                    .values(**datos)
++                )
++            else:
++                conn.execute(
++                    dispositivos_cache.insert().values(device_id=dispositivo.device_id, **datos)
++                )
++    except Exception as exc:
++        logger.warning(f'[OFFLINE] No se pudo actualizar la copia del dispositivo: {exc}')
++
++
++def dispositivo_desde_cache(device_id):
++    """Devuelve la copia SQLite del dispositivo (o None) para el modo offline."""
++    with _engine().connect() as conn:
++        return conn.execute(
++            dispositivos_cache.select().where(dispositivos_cache.c.device_id == device_id)
++        ).fetchone()
++
++
+ def guardar_deteccion_offline(
+     usuario_id,
+     tipo_evento,
+@@ -107,13 +161,17 @@ def guardar_deteccion_offline(
+     valor_ear=None,
+     valor_pitch=None,
+     duracion_alerta=None,
++    dispositivo_id=None,
++    fecha_hora=None,
+ ):
+-    """Guarda una detección en la cola SQLite local, con o sin WiFi."""
++    """Guarda una detección en la cola SQLite local cuando MySQL no responde."""
++    fecha_hora = fecha_hora or datetime.utcnow()
+     with _engine().connect() as conn:
+         conn.execute(
+             detecciones_pending.insert().values(
+                 usuario_id=usuario_id,
+-                fecha_hora=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
++                dispositivo_id=dispositivo_id,
++                fecha_hora=fecha_hora.strftime('%Y-%m-%d %H:%M:%S'),
+                 tipo_evento=tipo_evento,
+                 video_path=video_path,
+                 valor_ear=valor_ear,
+@@ -146,6 +204,8 @@ def registrar_deteccion_mysql(
+     valor_ear=None,
+     valor_pitch=None,
+     duracion_alerta=None,
++    dispositivo_id=None,
++    fecha_hora=None,
+ ):
+     """Guarda la deteccion en MySQL y actualiza estadisticas del usuario."""
+     det = Deteccion(
+@@ -155,6 +215,9 @@ def registrar_deteccion_mysql(
+         valor_ear=valor_ear,
+         valor_pitch=valor_pitch,
+         duracion_alerta=duracion_alerta,
++        dispositivo_id=dispositivo_id,
++        # Si el evento llega tarde (cola offline) se conserva la hora real.
++        fecha_hora=fecha_hora or datetime.utcnow(),
+     )
+     db.session.add(det)
+     db.session.flush()
+@@ -177,6 +240,13 @@ def registrar_deteccion_mysql(
+     return det, stats
+ 
+ 
++def _parse_fecha(valor):
++    try:
++        return datetime.strptime(str(valor), '%Y-%m-%d %H:%M:%S')
++    except (TypeError, ValueError):
++        return None
++
++
+ def mysql_disponible():
+     """Devuelve True si MySQL responde."""
+     try:
+@@ -220,6 +290,8 @@ def sincronizar_pendientes():
+                 valor_ear=row.valor_ear,
+                 valor_pitch=row.valor_pitch,
+                 duracion_alerta=row.duracion_alerta,
++                dispositivo_id=row.dispositivo_id,
++                fecha_hora=_parse_fecha(row.fecha_hora),
+             )
+ 
+             with _engine().connect() as offline_conn:
+diff --git a/app/static/js/panel_vivo.js b/app/static/js/panel_vivo.js
+new file mode 100644
+index 0000000..f857e67
+--- /dev/null
++++ b/app/static/js/panel_vivo.js
+@@ -0,0 +1,99 @@
++/*
++ * Estado Online/Offline en vivo de los ESP32.
++ *
++ * Cada 3 segundos consulta /api/panel/estado y actualiza, sin recargar la
++ * página, los elementos marcados con atributos data-* (ver dashboard.html y
++ * dispositivos.html):
++ *   data-estado-dispositivo="<ID>"   -> "Online" / "Offline"
++ *   data-detalle-dispositivo="<ID>"  -> canal: "vía USB", "vía WiFi", "vía USB + WiFi"
++ *   data-ultima-conexion="<ID>"      -> última señal recibida (hora argentina)
++ *   data-ip-dispositivo="<ID>"       -> IP informada por el ESP32
++ * Un ESP32 aparece Online si dio señales en los últimos 20 segundos por WiFi
++ * (heartbeat / consulta de comandos) o por USB (informado por la notebook).
++ */
++(function () {
++    'use strict';
++
++    const raiz = document.getElementById('panel-vivo');
++    if (!raiz) {
++        return;
++    }
++
++    const URL_ESTADO = raiz.dataset.url;
++    const INTERVALO_MS = 3000;
++    let fallosSeguidos = 0;
++
++    function todos(selector) {
++        return Array.from(document.querySelectorAll(selector));
++    }
++
++    function actualizarDispositivos(dispositivos) {
++        dispositivos.forEach(function (d) {
++            todos('[data-estado-dispositivo="' + d.device_id + '"]').forEach(function (el) {
++                el.textContent = d.texto;
++                el.classList.toggle('offline', !d.online);
++            });
++            todos('[data-detalle-dispositivo="' + d.device_id + '"]').forEach(function (el) {
++                el.textContent = d.detalle;
++            });
++            todos('[data-ultima-conexion="' + d.device_id + '"]').forEach(function (el) {
++                el.textContent = d.ultima_conexion || 'Nunca';
++            });
++            todos('[data-ip-dispositivo="' + d.device_id + '"]').forEach(function (el) {
++                el.textContent = d.ip_address || 'Sin registrar';
++            });
++        });
++
++        const resumen = document.getElementById('resumen-dispositivos');
++        if (resumen && dispositivos.length) {
++            const online = dispositivos.filter(function (d) { return d.online; });
++            if (online.length) {
++                resumen.textContent = 'Online · ' + online.map(function (d) {
++                    return d.device_id + ' (' + d.canales.join(' + ') + ')';
++                }).join(', ');
++                resumen.classList.remove('offline');
++            } else {
++                resumen.textContent = 'Offline · ningún ESP32 conectado';
++                resumen.classList.add('offline');
++            }
++        }
++    }
++
++    function estadoServidor(conectado, hora) {
++        const el = document.getElementById('estado-servidor');
++        if (!el) {
++            return;
++        }
++        el.classList.toggle('offline', !conectado);
++        el.querySelector('[data-texto]').textContent = conectado
++            ? 'Servidor y base de datos conectados · ' + hora
++            : 'Sin respuesta del servidor (reintentando)';
++    }
++
++    async function consultar() {
++        try {
++            const respuesta = await fetch(URL_ESTADO, {
++                headers: { 'Accept': 'application/json' },
++                cache: 'no-store'
++            });
++            if (respuesta.redirected || respuesta.status === 401) {
++                return; // Sesión cerrada: se deja de consultar.
++            }
++            if (!respuesta.ok) {
++                throw new Error('HTTP ' + respuesta.status);
++            }
++            const datos = await respuesta.json();
++            fallosSeguidos = 0;
++            estadoServidor(true, datos.hora_servidor);
++            actualizarDispositivos(datos.dispositivos || []);
++        } catch (error) {
++            fallosSeguidos += 1;
++            if (fallosSeguidos >= 2) {
++                estadoServidor(false);
++            }
++        }
++        setTimeout(consultar, INTERVALO_MS);
++    }
++
++    consultar();
++})();
+diff --git a/app/templates/admin_base_datos.html b/app/templates/admin_base_datos.html
+index 38a7f9d..2f11ed4 100644
+--- a/app/templates/admin_base_datos.html
++++ b/app/templates/admin_base_datos.html
+@@ -292,7 +292,7 @@
+                     <td><span class="pill">{{ row.roles }}</span></td>
+                     <td>{{ row.detecciones }}</td>
+                     <td><span class="score {{ score_class }}">{{ "%.0f"|format(row.score) }}/100</span></td>
+-                    <td>{{ usuario.fecha_registro.strftime('%d/%m/%Y') if usuario.fecha_registro else '—' }}</td>
++                    <td>{{ usuario.fecha_registro|hora_local('%d/%m/%Y') }}</td>
+                     <td>
+                         <a class="table-action" href="{{ url_for('main.editar_usuario', user_id=usuario.id) }}">
+                             Editar
+@@ -327,7 +327,7 @@
+                 <tr>
+                     <td>#{{ det.id }}</td>
+                     <td>{{ det.usuario.nombre }} {{ det.usuario.apellido }}</td>
+-                    <td>{{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}</td>
++                    <td>{{ det.fecha_hora|hora_local }}</td>
+                     <td><span class="pill">{{ det.tipo_evento }}</span></td>
+                     <td>{{ "%.2f"|format(det.valor_ear) if det.valor_ear is not none else '—' }}</td>
+                     <td>{{ "%.1f"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}°</td>
+diff --git a/app/templates/base.html b/app/templates/base.html
+index 936d162..63bbc91 100644
+--- a/app/templates/base.html
++++ b/app/templates/base.html
+@@ -245,6 +245,20 @@
+             footer { flex-direction: column; gap: 0.75rem; text-align: center; }
+         }
+     </style>
++    <style>
++        /* ── Estado Online/Offline en vivo (static/js/panel_vivo.js) ── */
++        .estado-vivo {
++            font-family: var(--font-mono); font-size: 0.95rem; font-weight: 700;
++            color: var(--success); margin-top: 0.4rem;
++            display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
++        }
++        .estado-vivo::before {
++            content: ''; width: 10px; height: 10px; border-radius: 50%;
++            background: currentColor; box-shadow: 0 0 10px currentColor; flex: none;
++        }
++        .estado-vivo.offline { color: var(--danger); }
++        .estado-servidor.offline { color: var(--danger); }
++    </style>
+     {% block extra_styles %}{% endblock %}
+ </head>
+ <body>
+@@ -264,6 +278,7 @@
+         <a href="{{ url_for('main.index') }}#tecnologia" class="nav-link">Tecnología</a>
+         {% if current_user.is_authenticated %}
+             <a href="{{ url_for('main.dashboard') }}" class="nav-link">Dashboard</a>
++            <a href="{{ url_for('main.historial') }}" class="nav-link">Historial</a>
+             <a href="{{ url_for('main.dispositivos') }}" class="nav-link">Dispositivos</a>
+             <a href="{{ url_for('main.logout') }}" class="nav-btn">Cerrar sesión</a>
+         {% else %}
+diff --git a/app/templates/comprar.html b/app/templates/comprar.html
+index 0a7bdc2..063af65 100644
+--- a/app/templates/comprar.html
++++ b/app/templates/comprar.html
+@@ -645,8 +645,8 @@
+                 <ul class="includes-list">
+                     <li><span class="check">✓</span> Dispositivo Vision hardware (cámara + ESP32)</li>
+                     <li><span class="check">✓</span> Software de IA pre-instalado</li>
+-                    <li><span class="check">✓</span> Soporte de montaje para parabrisas</li>
+-                    <li><span class="check">✓</span> Cable USB-C de alimentación (2m)</li>
++                    <li><span class="check">✓</span> Instalación profesional en el vehículo (12 V con fusible)</li>
++                    <li><span class="check">✓</span> Módulo de vibración para el respaldo del asiento</li>
+                     <li><span class="check">✓</span> Acceso a plataforma web 12 meses</li>
+                     <li><span class="check">✓</span> Activación del perfil del conductor</li>
+                     <li><span class="check">✓</span> Soporte técnico por e-mail</li>
+@@ -663,7 +663,7 @@
+                         </div>
+                         <div class="inst-row">
+                             <span class="cuotas">6 cuotas</span>
+-                            <span class="valor">$ 34.999 / mes</span>
++                            <span class="valor">$ 31.667 / mes</span>
+                             <span class="sin-interes">SIN INTERÉS</span>
+                         </div>
+                         <div class="inst-row">
+@@ -707,23 +707,23 @@
+         <div class="specs-grid">
+             <div class="spec-item">
+                 <div class="spec-key">Procesador de IA</div>
+-                <div class="spec-val">MediaPipe Face Mesh</div>
+-                <div class="spec-sub">468 landmarks faciales en tiempo real</div>
++                <div class="spec-val">MediaPipe + TensorFlow</div>
++                <div class="spec-sub">478 landmarks faciales en tiempo real</div>
+             </div>
+             <div class="spec-item">
+-                <div class="spec-key">Latencia de detección</div>
++                <div class="spec-key">Latencia de la alerta</div>
+                 <div class="spec-val">&lt; 500 ms</div>
+-                <div class="spec-sub">Desde captura hasta alerta activa</div>
++                <div class="spec-sub">Desde la confirmación hasta la alarma</div>
+             </div>
+             <div class="spec-item">
+                 <div class="spec-key">Umbral EAR</div>
+-                <div class="spec-val">0.20</div>
+-                <div class="spec-sub">Eye Aspect Ratio configurable</div>
++                <div class="spec-val">0.22</div>
++                <div class="spec-sub">Ojos cerrados 0,5 s + 0,75 s de confirmación</div>
+             </div>
+             <div class="spec-item">
+                 <div class="spec-key">Umbral Pitch</div>
+-                <div class="spec-val">30°</div>
+-                <div class="spec-sub">Ángulo de cabeceo calibrado</div>
++                <div class="spec-val">18°</div>
++                <div class="spec-sub">Respecto de la posición de referencia</div>
+             </div>
+             <div class="spec-item">
+                 <div class="spec-key">Búfer pre-evento</div>
+@@ -733,12 +733,12 @@
+             <div class="spec-item">
+                 <div class="spec-key">Actuadores</div>
+                 <div class="spec-val">Buzzer + Vibración</div>
+-                <div class="spec-sub">ESP32 — alerta persistente</div>
++                <div class="spec-sub">ESP32 por USB o WiFi — alerta sostenida</div>
+             </div>
+             <div class="spec-item">
+                 <div class="spec-key">Visión nocturna</div>
+                 <div class="spec-val">LEDs IR integrados</div>
+-                <div class="spec-sub">Compatible con cámara IP Gadnic</div>
++                <div class="spec-sub">Cámara dedicada del equipo</div>
+             </div>
+             <div class="spec-item">
+                 <div class="spec-key">Almacenamiento</div>
+@@ -747,8 +747,8 @@
+             </div>
+             <div class="spec-item">
+                 <div class="spec-key">Seguridad</div>
+-                <div class="spec-val">Bcrypt + HTTPS</div>
+-                <div class="spec-sub">Videos encriptados por perfil</div>
++                <div class="spec-val">Bcrypt + sesiones</div>
++                <div class="spec-sub">Videos privados por perfil</div>
+             </div>
+         </div>
+     </div>
+@@ -806,10 +806,8 @@
+                 <span class="faq-arrow">+</span>
+             </button>
+             <div class="faq-answer">
+-                El sistema es compatible con cualquier smartphone Android o iOS con cámara 
+-                frontal de al menos 720p, o con cámaras IP de la línea Gadnic (incluye 
+-                soporte de visión nocturna infrarroja). No se requiere hardware adicional 
+-                para la detección básica.
++                Ninguno: el equipo Vision incluye su propia cámara dedicada, con iluminación 
++                infrarroja para uso nocturno. No se necesita un teléfono ni otra cámara.
+             </div>
+         </div>
+         <div class="faq-item">
+@@ -818,10 +816,9 @@
+                 <span class="faq-arrow">+</span>
+             </button>
+             <div class="faq-answer">
+-                Sí. Cada clip está vinculado exclusivamente a tu usuario mediante un ID 
+-                encriptado. Nadie más —ni siquiera el administrador— puede acceder a tus 
+-                registros sin tus credenciales. Las contraseñas se almacenan con hash 
+-                Bcrypt + salt único.
++                Sí. Cada clip queda vinculado a tu cuenta y solo se puede ver con tu sesión 
++                iniciada: nadie más —ni siquiera el administrador— puede reproducir tus 
++                videos. Las contraseñas se almacenan con hash Bcrypt + salt único.
+             </div>
+         </div>
+         <div class="faq-item">
+@@ -830,10 +827,11 @@
+                 <span class="faq-arrow">+</span>
+             </button>
+             <div class="faq-answer">
+-                El kit incluye un soporte de succión para parabrisas. La instalación toma 
+-                menos de 5 minutos: colocás el soporte, conectás el cable USB-C al encendedor 
+-                o cargador y ejecutás la aplicación. El sistema calibra los umbrales del 
+-                conductor de forma automática en los primeros 30 segundos.
++                La instalación la realiza un técnico y está incluida en el precio: fija el 
++                equipo en el habitáculo sin obstruir tu visión, lo conecta al sistema eléctrico 
++                de 12 V con fusible y monta el módulo de vibración en el respaldo de tu asiento 
++                (1 a 2 horas). Al iniciar la marcha, mirá al frente unos segundos para que el 
++                sistema tome la posición de referencia de tu cabeza.
+             </div>
+         </div>
+         <div class="faq-item">
+@@ -843,9 +841,7 @@
+             </button>
+             <div class="faq-answer">
+                 El plan incluye soporte técnico por e-mail con respuesta en 48 horas hábiles. 
+-                Para flotas empresariales ofrecemos soporte prioritario con SLA de 24 horas. 
+-                El código fuente del software es auditabe por el cliente bajo acuerdo de 
+-                confidencialidad.
++                Para flotas empresariales ofrecemos soporte prioritario con SLA de 24 horas.
+             </div>
+         </div>
+     </div>
+@@ -854,7 +850,7 @@
+     <div class="buy-footer-banner">
+         <div class="buy-footer-banner-text">
+             <strong>¿Gestionás una flota o tenés dudas antes de comprar?</strong>
+-            Escribinos a <span style="color: var(--accent);">vision@itrt.edu.ar</span> — respondemos 
++            Escribinos a <span style="color: var(--accent);">contacto.vision88@gmail.com</span> — respondemos 
+             consultas técnicas y cotizaciones para empresas de transporte, remises y logística.
+         </div>
+         <a href="{{ url_for('main.register') }}" class="nav-btn filled" style="white-space: nowrap;">
+diff --git a/app/templates/dashboard.html b/app/templates/dashboard.html
+index 2bdcaa4..77d9515 100644
+--- a/app/templates/dashboard.html
++++ b/app/templates/dashboard.html
+@@ -483,6 +483,9 @@
+             <a class="dash-action-btn" href="{{ url_for('main.editar_usuario', user_id=current_user.id) }}">
+                 Modificar usuario
+             </a>
++            <a class="dash-action-btn outline" href="{{ url_for('main.historial') }}">
++                Historial y gráficos
++            </a>
+             <a class="dash-action-btn outline" href="{{ url_for('main.dispositivos') }}">
+                 Mis dispositivos
+             </a>
+@@ -518,13 +521,16 @@
+         </div>
+     </div>
+ 
++    <!-- Datos para el estado en vivo (static/js/panel_vivo.js) -->
++    <div id="panel-vivo" hidden data-url="{{ url_for('main.api_panel_estado') }}"></div>
++
+     <!-- Banner de sincronización -->
+     {% if pendientes_count and pendientes_count > 0 %}
+     <div class="sync-banner">
+         <span class="sync-icon">⟳</span>
+         <span>
+             <strong>{{ pendientes_count }} detección{{ 'es' if pendientes_count != 1 else '' }} pendiente{{ 's' if pendientes_count != 1 else '' }} de sincronizar.</strong>
+-            Estos registros se guardaron sin conexión y se subirán automáticamente al detectar WiFi.
++            Se guardaron en la base offline (SQLite) porque MySQL no respondía y se subirán solos a MySQL cuando vuelva la conexión.
+         </span>
+     </div>
+     {% else %}
+@@ -560,12 +566,20 @@
+             </div>
+         </div>
+         <div class="dash-stat">
+-            <span class="dash-stat-label">Estado del sistema</span>
+-            <div class="dash-stat-val" style="color: var(--success); font-size:1.15rem; margin-top:0.4rem; display: flex; align-items: center; gap: 0.5rem;">
+-                <span style="width: 10px; height: 10px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px var(--success); display: inline-block;"></span>
+-                SISTEMA OPERATIVO
++            <span class="dash-stat-label">Estado del dispositivo</span>
++            {% set conectados = estados.values()|selectattr('online')|list %}
++            <div id="resumen-dispositivos" class="estado-vivo {{ '' if conectados else 'offline' }}">
++                {% if not dispositivos %}
++                    Sin dispositivos vinculados
++                {% elif conectados %}
++                    Online · {% for e in conectados %}{{ e.device_id }} ({{ e.canales|join(' + ') }}){{ ', ' if not loop.last }}{% endfor %}
++                {% else %}
++                    Offline · ningún ESP32 conectado
++                {% endif %}
++            </div>
++            <div id="estado-servidor" class="dash-stat-sub estado-servidor">
++                <span data-texto>Servidor y base de datos conectados</span>
+             </div>
+-            <div class="dash-stat-sub">Servidor y base de datos conectados</div>
+         </div>
+     </div>
+ 
+@@ -599,14 +613,14 @@
+             <div class="account-field">
+                 <label>Fecha de registro</label>
+                 <div class="val" style="font-family: var(--font-mono); font-size:0.85rem;">
+-                    {{ current_user.fecha_registro.strftime('%d/%m/%Y') }}
++                    {{ current_user.fecha_registro|hora_local('%d/%m/%Y') }}
+                 </div>
+             </div>
+         </div>
+     </div>
+ 
+     <!-- Detections history -->
+-    <div class="section-label" style="margin-top: 2.5rem;">Caja Negra Digital — Historial de Detecciones</div>
++    <div class="section-label" style="margin-top: 2.5rem;">Caja Negra Digital — Últimas 20 detecciones · <a href="{{ url_for('main.historial') }}" style="color: var(--accent);">ver historial completo con filtros</a></div>
+ 
+     {% if detecciones %}
+     <div class="table-container">
+@@ -624,7 +638,7 @@
+             <tbody>
+                 {% for det in detecciones %}
+                 <tr>
+-                    <td>{{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}</td>
++                    <td>{{ det.fecha_hora|hora_local }}</td>
+                     <td>
+                         {% if det.tipo_evento == 'Ojos Cerrados' %}
+                             <span class="badge badge-ojos">Ojos Cerrados</span>
+@@ -657,9 +671,13 @@
+         <h3>Sin eventos registrados</h3>
+         <p>
+             Cuando el sistema detecte un evento de somnolencia o cabeceo,<br>
+-            el clip de video aparecerá aquí de forma privada y encriptada.
++            el clip de video aparecerá aquí de forma privada: solo tu cuenta puede verlo.
+         </p>
+     </div>
+     {% endif %}
+ </div>
+ {% endblock %}
++
++{% block extra_scripts %}
++<script src="{{ url_for('static', filename='js/panel_vivo.js') }}"></script>
++{% endblock %}
+diff --git a/app/templates/dispositivos.html b/app/templates/dispositivos.html
+index d2485fd..45ec8be 100644
+--- a/app/templates/dispositivos.html
++++ b/app/templates/dispositivos.html
+@@ -145,6 +145,27 @@
+         box-shadow: 0 0 20px rgba(0,229,255,0.4);
+     }
+ 
++    .device-status-wrap { text-align: right; }
++    .device-channel {
++        font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.1em;
++        color: var(--text-muted); margin-top: 0.3rem; text-transform: uppercase;
++    }
++    .device-events { margin-top: 1.25rem; border-top: 1px solid var(--border); padding-top: 1rem; }
++    .device-events-title {
++        font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.15em;
++        text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.6rem;
++    }
++    .device-events table { width: 100%; border-collapse: collapse; }
++    .device-events th {
++        font-family: var(--font-mono); font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase;
++        color: var(--text-muted); text-align: left; font-weight: 400; padding: 0 0.5rem 0.35rem 0;
++    }
++    .device-events td {
++        font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-mid);
++        padding: 0.35rem 0.5rem 0.35rem 0; border-bottom: 1px solid rgba(30,45,61,0.6);
++    }
++    .device-events-empty { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
++
+     .device-list {
+         display: grid;
+         gap: 1.25rem;
+@@ -279,21 +300,27 @@
+             {% if dispositivos %}
+             <div class="device-list">
+                 {% for dispositivo in dispositivos %}
+-                {% set online = dispositivo.last_seen and (now() - dispositivo.last_seen).total_seconds() < 600 %}
++                {% set estado = estados[dispositivo.device_id] %}
+                 <article class="device-row">
+                     <div class="device-row-head">
+                         <div class="device-id">{{ dispositivo.device_id }}</div>
+-                        <div class="device-status {{ '' if online else 'offline' }}">
+-                            {{ 'Online' if online else 'Offline' }}
++                        <div class="device-status-wrap">
++                            <div class="device-status {{ '' if estado.online else 'offline' }}"
++                                 data-estado-dispositivo="{{ dispositivo.device_id }}">
++                                {{ estado.texto }}
++                            </div>
++                            <div class="device-channel" data-detalle-dispositivo="{{ dispositivo.device_id }}">
++                                {{ estado.detalle }}
++                            </div>
+                         </div>
+                     </div>
+                     <div class="device-meta">
+                         <div>MAC: <span style="color: var(--text);">{{ dispositivo.mac or 'Sin registrar' }}</span></div>
+-                        <div>IP: <span style="color: var(--text);">{{ dispositivo.ip_address or 'Sin registrar' }}</span></div>
++                        <div>IP: <span style="color: var(--text);" data-ip-dispositivo="{{ dispositivo.device_id }}">{{ dispositivo.ip_address or 'Sin registrar' }}</span></div>
+                         <div>Firmware: <span style="color: var(--text);">{{ dispositivo.firmware_version or 'N/D' }}</span></div>
+                         <div>
+                             Última conexión:
+-                            <span style="color: var(--text);">{{ dispositivo.last_seen.strftime('%d/%m/%Y %H:%M:%S') if dispositivo.last_seen else 'Nunca' }}</span>
++                            <span style="color: var(--text);" data-ultima-conexion="{{ dispositivo.device_id }}">{{ estado.ultima_conexion or 'Nunca' }}</span>
+                         </div>
+                     </div>
+                     <div class="device-actions">
+@@ -316,6 +343,33 @@
+                         Guardá <code>config.json</code> en la misma carpeta que <code>deteccion_tiempo_real.py</code>.
+                         Cada descarga genera una clave nueva y la anterior deja de funcionar.
+                     </div>
++                    <div class="device-events">
++                        <div class="device-events-title">Activaciones de alarma informadas por el ESP32</div>
++                        {% set lista = eventos[dispositivo.device_id] %}
++                        {% if lista %}
++                        <table>
++                            <tr>
++                                <th>Fecha y hora</th>
++                                <th>Alarma</th>
++                                <th>Canal de la orden</th>
++                            </tr>
++                            {% for ev in lista %}
++                            <tr>
++                                <td>{{ ev.created_at|hora_local }}</td>
++                                <td>{{ 'Encendida' if ev.event_type == 'alarma_on' else 'Apagada' }}</td>
++                                <td>
++                                    {% if ev.value == 'SEGURIDAD' %}Apagado automático de seguridad
++                                    {% elif ev.value == 'WEB' %}Plataforma web
++                                    {% elif ev.value == 'WIFI' %}WiFi
++                                    {% else %}{{ ev.value }}{% endif %}
++                                </td>
++                            </tr>
++                            {% endfor %}
++                        </table>
++                        {% else %}
++                        <div class="device-events-empty">Todavía no hay activaciones registradas.</div>
++                        {% endif %}
++                    </div>
+                 </article>
+                 {% endfor %}
+             </div>
+@@ -331,6 +385,8 @@
+ {% endblock %}
+ 
+ {% block extra_scripts %}
++<div id="panel-vivo" hidden data-url="{{ url_for('main.api_panel_estado') }}"></div>
++<script src="{{ url_for('static', filename='js/panel_vivo.js') }}"></script>
+ <script>
+     document.querySelectorAll('.config-download-form').forEach((form) => {
+         form.addEventListener('submit', (event) => {
+diff --git a/app/templates/historial.html b/app/templates/historial.html
+new file mode 100644
+index 0000000..845a2ed
+--- /dev/null
++++ b/app/templates/historial.html
+@@ -0,0 +1,238 @@
++{% extends 'base.html' %}
++
++{% block title %}Historial — Vision{% endblock %}
++
++{% block extra_styles %}
++<style>
++    .historial { padding: 4rem 5rem 5rem; max-width: 1280px; margin: 0 auto; }
++
++    .hist-header { margin-bottom: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1.75rem; }
++    .hist-kicker {
++        font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.2em;
++        text-transform: uppercase; color: var(--accent); margin-bottom: 0.5rem;
++    }
++    .hist-title { font-size: 2rem; font-weight: 800; }
++    .hist-sub { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted); margin-top: 0.4rem; }
++
++    .section-label {
++        font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.22em;
++        text-transform: uppercase; color: var(--text-muted); margin: 2.5rem 0 1.25rem;
++        display: flex; align-items: center; gap: 0.85rem;
++    }
++    .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
++
++    /* Filtros */
++    .filtros {
++        display: grid; grid-template-columns: repeat(4, 1fr) auto; gap: 1rem; align-items: end;
++        background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
++        padding: 1.5rem;
++    }
++    .filtro label {
++        display: block; font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.15em;
++        text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.45rem;
++    }
++    .filtro input, .filtro select {
++        width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
++        color: var(--text); font-family: var(--font-mono); font-size: 0.8rem; padding: 0.7rem 0.8rem;
++        color-scheme: dark;
++    }
++    .filtro input:focus, .filtro select:focus { outline: none; border-color: var(--accent); }
++    .filtro-acciones { display: flex; gap: 0.6rem; }
++    .btn {
++        border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent);
++        color: var(--bg); font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.14em;
++        text-transform: uppercase; font-weight: 700; padding: 0.75rem 1.1rem; cursor: pointer;
++        text-decoration: none; white-space: nowrap;
++    }
++    .btn.secundario { background: transparent; color: var(--accent); border-color: rgba(0,229,255,0.3); }
++
++    /* Gráficos (barras en CSS: funcionan sin internet) */
++    .graficos { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; }
++    .grafico {
++        background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
++        padding: 1.5rem;
++    }
++    .grafico h3 {
++        font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.15em;
++        text-transform: uppercase; color: var(--text-muted); margin-bottom: 1.25rem; font-weight: 400;
++    }
++    .barras-dias { display: flex; align-items: flex-end; gap: 4px; height: 180px; }
++    .barra-dia { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
++    .barra-dia .valor { font-family: var(--font-mono); font-size: 0.6rem; color: var(--text); margin-bottom: 0.2rem; }
++    .barra-dia .columna {
++        width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px;
++        box-shadow: 0 0 10px rgba(0,229,255,0.35);
++    }
++    .barra-dia .columna.vacia { background: var(--border); box-shadow: none; }
++    .barra-dia .etiqueta {
++        font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); margin-top: 0.35rem;
++        writing-mode: vertical-rl; transform: rotate(180deg); height: 2.6rem;
++    }
++    .barra-tipo { margin-bottom: 1rem; }
++    .barra-tipo .fila { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 0.72rem; margin-bottom: 0.35rem; }
++    .barra-tipo .pista { background: var(--border); height: 10px; border-radius: 5px; overflow: hidden; }
++    .barra-tipo .relleno { height: 100%; border-radius: 5px; }
++    .relleno.ojos { background: var(--danger); }
++    .relleno.cabeceo { background: var(--warning); }
++    .relleno.ambos { background: var(--accent); }
++
++    /* Tabla (mismo estilo que el dashboard) */
++    .table-container { border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
++    .detections-table { width: 100%; border-collapse: collapse; background: var(--surface); }
++    .detections-table th {
++        font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.16em; text-transform: uppercase;
++        color: var(--text-muted); text-align: left; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
++        background: var(--surface2);
++    }
++    .detections-table td {
++        font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-mid);
++        padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--border);
++    }
++    .detections-table tr:last-child td { border-bottom: none; }
++    .badge {
++        display: inline-block; padding: 0.25rem 0.7rem; font-family: var(--font-mono); font-size: 0.65rem;
++        letter-spacing: 0.12em; text-transform: uppercase; border-radius: 2px; font-weight: 700;
++    }
++    .badge-ojos    { background: rgba(255,59,107,0.12); color: var(--danger); border: 1px solid rgba(255,59,107,0.4); }
++    .badge-cabeceo { background: rgba(255,170,0,0.12);  color: var(--warning); border: 1px solid rgba(255,170,0,0.4); }
++    .badge-ambos   { background: rgba(0,229,255,0.12);  color: var(--accent);  border: 1px solid rgba(0,229,255,0.3); }
++    .video-link {
++        color: var(--accent); font-size: 0.75rem; text-decoration: none; padding: 0.3rem 0.75rem;
++        border: 1px solid rgba(0,229,255,0.3); border-radius: var(--radius);
++    }
++    .empty-state {
++        background: var(--surface); border: 1px solid var(--border); padding: 3.5rem 2rem; text-align: center;
++        border-radius: var(--radius); font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted);
++    }
++
++    @media (max-width: 1000px) {
++        .historial { padding: 3rem 1.25rem; }
++        .filtros { grid-template-columns: 1fr 1fr; }
++        .graficos { grid-template-columns: 1fr; }
++    }
++</style>
++{% endblock %}
++
++{% block content %}
++<div class="historial">
++    <div class="hist-header">
++        <div class="hist-kicker">// Caja negra digital</div>
++        <h1 class="hist-title">Historial de detecciones</h1>
++        <div class="hist-sub">
++            {{ total }} detección{{ 'es' if total != 1 }} con los filtros aplicados
++            {% if total > limite %} · se muestran las {{ limite }} más recientes{% endif %}
++            · horario de Argentina
++        </div>
++    </div>
++
++    <form class="filtros" method="GET" action="{{ url_for('main.historial') }}">
++        <div class="filtro">
++            <label for="desde">Desde</label>
++            <input type="date" id="desde" name="desde" value="{{ filtros.desde }}">
++        </div>
++        <div class="filtro">
++            <label for="hasta">Hasta</label>
++            <input type="date" id="hasta" name="hasta" value="{{ filtros.hasta }}">
++        </div>
++        <div class="filtro">
++            <label for="tipo">Tipo de evento</label>
++            <select id="tipo" name="tipo">
++                <option value="">Todos</option>
++                {% for t in tipos %}
++                <option value="{{ t }}" {% if filtros.tipo == t %}selected{% endif %}>{{ t }}</option>
++                {% endfor %}
++            </select>
++        </div>
++        <div class="filtro">
++            <label for="dispositivo">Dispositivo</label>
++            <select id="dispositivo" name="dispositivo">
++                <option value="">Todos</option>
++                {% for d in dispositivos %}
++                <option value="{{ d.id }}" {% if filtros.dispositivo == d.id|string %}selected{% endif %}>{{ d.device_id }}</option>
++                {% endfor %}
++            </select>
++        </div>
++        <div class="filtro-acciones">
++            <button class="btn" type="submit">Filtrar</button>
++            <a class="btn secundario" href="{{ url_for('main.historial') }}">Limpiar</a>
++        </div>
++    </form>
++
++    <div class="section-label">Gráficos</div>
++    <div class="graficos">
++        <div class="grafico">
++            <h3>Detecciones por día ({{ grafico_dias[0].etiqueta }} al {{ grafico_dias[-1].etiqueta }})</h3>
++            <div class="barras-dias">
++                {% for g in grafico_dias %}
++                <div class="barra-dia" title="{{ g.etiqueta }}: {{ g.cantidad }}">
++                    {% if g.cantidad %}<span class="valor">{{ g.cantidad }}</span>{% endif %}
++                    <div class="columna {{ 'vacia' if not g.cantidad }}"
++                         style="height: {{ (g.cantidad / max_dia * 100)|round(1) if g.cantidad else 1 }}%;"></div>
++                    <span class="etiqueta">{{ g.etiqueta }}</span>
++                </div>
++                {% endfor %}
++            </div>
++        </div>
++        <div class="grafico">
++            <h3>Por tipo de evento</h3>
++            {% for g in grafico_tipos %}
++            <div class="barra-tipo">
++                <div class="fila"><span>{{ g.nombre }}</span><span>{{ g.cantidad }}</span></div>
++                <div class="pista">
++                    <div class="relleno {{ 'ojos' if g.nombre == 'Ojos Cerrados' else ('cabeceo' if g.nombre == 'Cabeceo' else 'ambos') }}"
++                         style="width: {{ (g.cantidad / max_tipo * 100)|round(1) }}%;"></div>
++                </div>
++            </div>
++            {% endfor %}
++        </div>
++    </div>
++
++    <div class="section-label">Detalle</div>
++    {% if detecciones %}
++    <div class="table-container">
++        <table class="detections-table">
++            <thead>
++                <tr>
++                    <th>Fecha y hora</th>
++                    <th>Tipo de evento</th>
++                    <th>Dispositivo</th>
++                    <th>EAR (ojos)</th>
++                    <th>Pitch (cabeceo)</th>
++                    <th>Duración alerta</th>
++                    <th>Evidencia</th>
++                </tr>
++            </thead>
++            <tbody>
++                {% for det in detecciones %}
++                <tr>
++                    <td>{{ det.fecha_hora|hora_local }}</td>
++                    <td>
++                        {% if det.tipo_evento == 'Ojos Cerrados' %}
++                            <span class="badge badge-ojos">Ojos Cerrados</span>
++                        {% elif det.tipo_evento == 'Cabeceo' %}
++                            <span class="badge badge-cabeceo">Cabeceo</span>
++                        {% else %}
++                            <span class="badge badge-ambos">Ambos</span>
++                        {% endif %}
++                    </td>
++                    <td>{{ det.dispositivo.device_id if det.dispositivo else '—' }}</td>
++                    <td>{{ "%.2f"|format(det.valor_ear) if det.valor_ear is not none else '—' }}</td>
++                    <td>{{ "%.1f°"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}</td>
++                    <td>{{ "%.1f s"|format(det.duracion_alerta) if det.duracion_alerta is not none else '—' }}</td>
++                    <td>
++                        {% if det.video_path and det.video_path != 'sin_video' %}
++                        <a href="{{ url_for('main.serve_video', det_id=det.id) }}" class="video-link">▶ Ver clip</a>
++                        {% else %}
++                        <span style="color: var(--text-muted); font-size: 0.72rem;">Sin clip</span>
++                        {% endif %}
++                    </td>
++                </tr>
++                {% endfor %}
++            </tbody>
++        </table>
++    </div>
++    {% else %}
++    <div class="empty-state">No hay detecciones que coincidan con los filtros.</div>
++    {% endif %}
++</div>
++{% endblock %}
+diff --git a/app/templates/index.html b/app/templates/index.html
+index e0bcbaa..26ebbc9 100644
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -849,14 +849,14 @@
+ <div class="stats-bar">
+     <div class="stat">
+         <span class="stat-num">&lt;500ms</span>
+-        <span class="stat-label">Tiempo de detección</span>
++        <span class="stat-label">Envío de la alerta al ESP32</span>
+     </div>
+     <div class="stat">
+         <span class="stat-num">10s</span>
+         <span class="stat-label">Búfer de evidencia pre-evento</span>
+     </div>
+     <div class="stat">
+-        <span class="stat-num">468</span>
++        <span class="stat-num">478</span>
+         <span class="stat-label">Landmarks faciales analizados</span>
+     </div>
+ </div>
+@@ -933,7 +933,7 @@
+                 </svg>
+             </div>
+             <h3>Captura de datos</h3>
+-            <p>Cámara (smartphone o IP Gadnic) captura el rostro del conductor con soporte de visión nocturna infrarroja.</p>
++            <p>Una cámara web dedicada captura el rostro del conductor en tiempo real (en el modelo comercial, con iluminación infrarroja).</p>
+         </div>
+         <div class="card" data-num="02">
+             <div class="card-icon">
+@@ -942,7 +942,7 @@
+                 </svg>
+             </div>
+             <h3>IA en tiempo real</h3>
+-            <p>MediaPipe Face Mesh calcula el EAR (Eye Aspect Ratio) y el ángulo Pitch para detectar micro-sueños y cabeceos.</p>
++            <p>MediaPipe calcula el EAR (Eye Aspect Ratio) y el ángulo Pitch, y una red neuronal confirma los cabeceos, para detectar microsueños.</p>
+         </div>
+         <div class="card" data-num="03">
+             <div class="card-icon">
+@@ -951,7 +951,7 @@
+                 </svg>
+             </div>
+             <h3>Alerta persistente</h3>
+-            <p>El ESP32 activa buzzer y vibración que no se detienen hasta que la IA confirma que el conductor ha recuperado el estado de alerta.</p>
++            <p>El ESP32 activa buzzer y vibración, que se mantienen mientras la IA detecte signos de somnolencia y se apagan solos cuando el conductor abre los ojos y endereza la cabeza.</p>
+         </div>
+         <div class="card" data-num="04">
+             <div class="card-icon">
+@@ -960,7 +960,7 @@
+                 </svg>
+             </div>
+             <h3>Caja negra digital</h3>
+-            <p>Cada evento genera un clip de video (10s pre + post) almacenado de forma encriptada en el perfil privado del conductor.</p>
++            <p>Cada evento genera un clip de video (10s pre + post) registrado en el perfil privado del conductor, visible solo con su sesión iniciada.</p>
+         </div>
+     </div>
+ </section>
+@@ -980,17 +980,17 @@
+         <div class="pipe-step">
+             <span class="pipe-num">FASE 02</span>
+             <div class="pipe-title">Detección IA</div>
+-            <p class="pipe-desc">Si EAR &lt; 0.20 o Pitch &gt; 30° por más de 1.5s consecutivos → Evento confirmado.</p>
++            <p class="pipe-desc">Si EAR &lt; 0.22 durante 0,5 s (o &lt; 0.28 durante 1,2 s), o un cabeceo de 18° o más dura 1,2 s, y se mantiene 0,75 s más → Evento confirmado.</p>
+         </div>
+         <div class="pipe-step">
+             <span class="pipe-num">FASE 03</span>
+             <div class="pipe-title">Actuación</div>
+-            <p class="pipe-desc">ESP32 activa buzzer y motor vibrador. La alarma persiste hasta confirmar reacción real.</p>
++            <p class="pipe-desc">ESP32 activa buzzer y motor vibrador (por USB o, de respaldo, WiFi). La alarma se mantiene mientras persisten los signos de somnolencia.</p>
+         </div>
+         <div class="pipe-step">
+             <span class="pipe-num">FASE 04</span>
+             <div class="pipe-title">Registro</div>
+-            <p class="pipe-desc">Video concatenado sube al servidor Flask, vinculado al user_id del conductor autenticado.</p>
++            <p class="pipe-desc">El video se guarda en el equipo y el evento se registra en el servidor Flask (o en SQLite si no hay conexión), vinculado al conductor.</p>
+         </div>
+     </div>
+ </section>
+diff --git a/app/templates/producto_3d.html b/app/templates/producto_3d.html
+index 9caa7c5..843f753 100644
+--- a/app/templates/producto_3d.html
++++ b/app/templates/producto_3d.html
+@@ -760,7 +760,7 @@
+             body: 'La linea punteada marca hacia donde apunta el lente: el rostro del conductor, un poco por ' +
+                   'delante del apoyacabezas. Sobre ese cuadro corre el analisis de landmarks faciales que ' +
+                   'alimenta el modelo de somnolencia.',
+-            specs: [['Distancia', '~21 cm en maqueta'], ['Objetivo', 'Rostro del conductor'], ['Landmarks', '468']]
++            specs: [['Distancia', '~21 cm en maqueta'], ['Objetivo', 'Rostro del conductor'], ['Landmarks', '478']]
+         },
+         logo: {
+             tag: 'Terminacion', title: 'Logo grabado',
+diff --git a/deteccion_tiempo_real.py b/deteccion_tiempo_real.py
+index fcda201..782dbbb 100644
+--- a/deteccion_tiempo_real.py
++++ b/deteccion_tiempo_real.py
+@@ -1,12 +1,14 @@
+ from collections import Counter, deque
+ from concurrent.futures import ThreadPoolExecutor
++from contextlib import contextmanager
+ from dataclasses import dataclass
+-from datetime import datetime
++from datetime import datetime, timedelta, timezone
+ import json
+ import os
+ from pathlib import Path
+ import queue
+ import socket
++import sqlite3
+ import sys
+ import tempfile
+ import threading
+@@ -101,6 +103,16 @@ ESP32_BACKEND_TIMEOUT_SECONDS = 3.0
+ ESP32_WIFI_REINTENTO_SECONDS = 15.0
+ DETECTION_REPORT_COOLDOWN_SECONDS = 20.0
+ 
++# Cada cuanto se le informa a la web si el ESP32 responde por el cable USB,
++# para que "Mis dispositivos" lo muestre Online aunque no tenga WiFi.
++ESP32_PRESENCIA_SECONDS = 5.0
++
++# Base de datos offline (SQLite) de la notebook: si el servidor web no
++# responde, cada deteccion se guarda aca y se sube sola a MySQL cuando vuelve
++# la conexion, conservando la hora real del evento.
++PENDIENTES_DB_PATH = BASE_DIR / "vision_pendientes.db"
++PENDIENTES_REINTENTO_SECONDS = 30.0
++
+ BLACKBOX_PRE_EVENT_SECONDS = 10.0
+ BLACKBOX_CONFIRMATION_SECONDS = 0.75
+ BLACKBOX_POST_EVENT_SECONDS = 10.0
+@@ -449,6 +461,12 @@ class Esp32AlarmController:
+         self._detener = threading.Event()
+         self._hilo = threading.Thread(target=self._run, daemon=True, name="Esp32Alarma")
+         self._hilo.start()
++        # Informa a la web si el ESP32 responde por USB (estado Online/Offline).
++        self._config = config
++        self._hilo_presencia = threading.Thread(
++            target=self._informar_presencia, daemon=True, name="Esp32Presencia"
++        )
++        self._hilo_presencia.start()
+ 
+     def update(self, somnolencia_detectada):
+         if somnolencia_detectada == self.alarma_activada:
+@@ -462,8 +480,31 @@ class Esp32AlarmController:
+         self._detener.set()
+         self._cambio.set()
+         self._hilo.join(timeout=10.0)
++        self._hilo_presencia.join(timeout=5.0)
+         self.usb.cerrar()
+ 
++    def _informar_presencia(self):
++        """
++        Cada 5 s le avisa al servidor si el ESP32 esta respondiendo por el cable.
++        Si el servidor no esta disponible no pasa nada: la alarma funciona igual.
++        """
++        url = f"{self._config.server_url}/api/devices/{self._config.device_id}/presencia"
++        aviso_clave = False
++        while not self._detener.is_set():
++            try:
++                respuesta = requests.post(
++                    url,
++                    json={"usb": self.usb.conectado},
++                    headers={"X-Vision-Api-Key": self._config.api_key},
++                    timeout=2.0,
++                )
++                if respuesta.status_code == 401 and not aviso_clave:
++                    aviso_clave = True
++                    print("[WEB] El servidor rechazo la api_key: volve a descargar config.json.")
++            except requests.exceptions.RequestException:
++                pass
++            self._detener.wait(ESP32_PRESENCIA_SECONDS)
++
+     def _run(self):
+         # None = estado desconocido: al arrancar se manda OFF para dejarlo en un estado conocido.
+         estado_enviado = None
+@@ -539,16 +580,40 @@ class RecordedDrowsinessEvent:
+     estado: str
+     confianza: float | None
+     video_seconds: float
++    # Hora real (UTC) en que empezo el episodio. La web la muestra en hora
++    # argentina, aunque el evento llegue tarde desde la base offline.
++    fecha_hora_utc: str | None = None
++
++
++def _utc_iso(hace_segundos=0.0):
++    """Fecha y hora UTC actual (menos hace_segundos) en formato ISO, sin zona."""
++    momento = datetime.now(timezone.utc) - timedelta(seconds=max(0.0, hace_segundos))
++    return momento.replace(tzinfo=None).isoformat(timespec="seconds")
+ 
+ 
+ class DetectionReporter:
+-    """Registra en el backend un evento por episodio de somnolencia."""
++    """
++    Registra en el backend un evento por episodio de somnolencia.
+ 
+-    def __init__(self, config):
++    Si el servidor no responde, el evento se guarda en la base de datos
++    offline SQLite de la notebook (vision_pendientes.db) y un hilo lo vuelve a
++    enviar cada 30 s. Cuando la conexion vuelve, la deteccion se sube a MySQL
++    con la hora real en que ocurrio.
++    """
++
++    def __init__(self, config, db_path=PENDIENTES_DB_PATH):
+         self.config = config
++        self.db_path = str(db_path)
+         self._executor = ThreadPoolExecutor(max_workers=1)
++        self._lock_db = threading.Lock()
++        self._detener = threading.Event()
+         self._active_reported = False
+         self._last_report_at = 0.0
++        self._crear_base_offline()
++        self._hilo_reintentos = threading.Thread(
++            target=self._reintentar_periodicamente, daemon=True, name="ReenvioPendientes"
++        )
++        self._hilo_reintentos.start()
+ 
+     def update(self, somnolencia_detectada, decision, eye_evidence, head_evidence):
+         if not somnolencia_detectada:
+@@ -596,12 +661,103 @@ class DetectionReporter:
+             estado=decision.state,
+             confianza=_float_or_none(decision.confidence),
+             video_seconds=0.0,
++            fecha_hora_utc=_utc_iso(),
+         )
+ 
+-    def _send(self, event):
+-        payload = {
+-            "api_key": self.config.api_key,
+-            "device_id": self.config.device_id,
++    # ── Base de datos offline (SQLite) ─────────────────────────────────────
++
++    @contextmanager
++    def _base(self):
++        """Conexion a la base offline: confirma los cambios y siempre la cierra."""
++        with self._lock_db:
++            conn = sqlite3.connect(self.db_path, timeout=5.0)
++            try:
++                yield conn
++                conn.commit()
++            finally:
++                conn.close()
++
++    def _crear_base_offline(self):
++        with self._base() as conn:
++            conn.execute(
++                """
++                CREATE TABLE IF NOT EXISTS detecciones_pendientes (
++                    id INTEGER PRIMARY KEY AUTOINCREMENT,
++                    fecha_hora_utc TEXT,
++                    datos_json TEXT NOT NULL,
++                    intentos INTEGER NOT NULL DEFAULT 0,
++                    creado_en TEXT NOT NULL
++                )
++                """
++            )
++
++    def _guardar_pendiente(self, payload):
++        with self._base() as conn:
++            conn.execute(
++                "INSERT INTO detecciones_pendientes (fecha_hora_utc, datos_json, creado_en) "
++                "VALUES (?, ?, ?)",
++                (payload.get("fecha_hora_utc"), json.dumps(payload, ensure_ascii=False), _utc_iso()),
++            )
++        print(
++            "[OFFLINE] Servidor no disponible: deteccion guardada en la base SQLite "
++            f"{Path(self.db_path).name}; se subira a MySQL cuando vuelva la conexion."
++        )
++
++    def pendientes(self):
++        with self._base() as conn:
++            return conn.execute("SELECT COUNT(*) FROM detecciones_pendientes").fetchone()[0]
++
++    def sincronizar_pendientes(self):
++        """Sube en orden las detecciones guardadas offline. Se detiene si el servidor sigue caido."""
++        with self._base() as conn:
++            filas = conn.execute(
++                "SELECT id, datos_json FROM detecciones_pendientes ORDER BY id"
++            ).fetchall()
++            if not filas:
++                return 0
++
++            print(f"[SYNC] Subiendo {len(filas)} deteccion(es) guardada(s) offline...")
++            subidas = 0
++            for fila_id, datos_json in filas:
++                try:
++                    payload = json.loads(datos_json)
++                except ValueError:
++                    conn.execute("DELETE FROM detecciones_pendientes WHERE id = ?", (fila_id,))
++                    continue
++
++                resultado = self._enviar_payload(payload)
++                if resultado == "reintentar":
++                    conn.execute(
++                        "UPDATE detecciones_pendientes SET intentos = intentos + 1 WHERE id = ?",
++                        (fila_id,),
++                    )
++                    break
++                # "ok" o "descartar": sale de la cola.
++                conn.execute("DELETE FROM detecciones_pendientes WHERE id = ?", (fila_id,))
++                if resultado == "ok":
++                    subidas += 1
++
++        if subidas:
++            print(f"[SYNC] {subidas} deteccion(es) offline sincronizada(s) con MySQL.")
++        return subidas
++
++    def _reintentar_periodicamente(self):
++        # El primer intento es al arrancar: pueden quedar pendientes de otra sesion.
++        while True:
++            try:
++                self.sincronizar_pendientes()
++            except Exception as exc:
++                print(f"[SYNC] Error al subir pendientes: {exc}")
++            if self._detener.wait(PENDIENTES_REINTENTO_SECONDS):
++                break
++
++    # ── Envio al servidor ──────────────────────────────────────────────────
++
++    @staticmethod
++    def _payload(event):
++        # La api_key no se guarda en la base offline: se agrega al enviar, asi
++        # sigue sirviendo aunque se descargue un config.json nuevo.
++        return {
+             "tipo_evento": event.tipo_evento,
+             "video_path": event.video_path,
+             "valor_ear": event.valor_ear,
+@@ -610,25 +766,55 @@ class DetectionReporter:
+             "estado": event.estado,
+             "confianza": event.confianza,
+             "duracion_video": event.video_seconds,
++            "fecha_hora_utc": event.fecha_hora_utc,
+         }
+ 
++    def _enviar_payload(self, payload):
++        """Devuelve "ok", "reintentar" (problema temporal) o "descartar" (dato invalido)."""
++        datos = dict(payload)
++        datos["api_key"] = self.config.api_key
++        datos["device_id"] = self.config.device_id
+         url = f"{self.config.server_url}/api/deteccion"
+         try:
+-            response = requests.post(url, json=payload, timeout=3.0)
+-            response.raise_for_status()
+-            data = response.json()
++            response = requests.post(url, json=datos, timeout=3.0)
++        except requests.exceptions.RequestException as exc:
++            print(f"[API] No se pudo registrar deteccion en {url}: {exc.__class__.__name__}")
++            return "reintentar"
++
++        if response.status_code in (200, 201):
++            try:
++                data = response.json()
++            except ValueError:
++                data = {}
+             print(
+                 "[API] Deteccion registrada "
+                 f"id={data.get('deteccion_id')} usuario={data.get('usuario_id')} "
+                 f"total={data.get('total_eventos')} score={data.get('score_conduccion')}"
+             )
+-        except requests.exceptions.RequestException as exc:
+-            print(f"[API] No se pudo registrar deteccion en {url}: {exc}")
+-        except ValueError:
+-            print(f"[API] Respuesta no JSON al registrar deteccion: {response.text}")
++            return "ok"
++        if response.status_code == 202:
++            # MySQL estaba caido: el servidor la guardo en su propia base SQLite.
++            print("[API] Deteccion guardada en la base offline del servidor (MySQL no disponible).")
++            return "ok"
++        if response.status_code == 401:
++            # Se conserva: con un config.json nuevo y el script reiniciado se reenvia.
++            print("[API] El servidor rechazo la api_key: volve a descargar config.json.")
++            return "reintentar"
++        if 400 <= response.status_code < 500:
++            print(f"[API] El servidor rechazo la deteccion ({response.status_code}): {response.text[:200]}")
++            return "descartar"
++        print(f"[API] Error del servidor ({response.status_code}); se reintentara.")
++        return "reintentar"
++
++    def _send(self, event):
++        payload = self._payload(event)
++        if self._enviar_payload(payload) == "reintentar":
++            self._guardar_pendiente(payload)
+ 
+     def cerrar(self):
+         self._executor.shutdown(wait=True, cancel_futures=False)
++        self._detener.set()
++        self._hilo_reintentos.join(timeout=5.0)
+ 
+ 
+ class PredictionSmoother:
+@@ -948,6 +1134,8 @@ class BlackBoxRecorder:
+         frame_size = (frame.shape[1], frame.shape[0])
+         output_path = self._make_output_path()
+         self.event_started_at = self.candidate_started_at or now
++        # Hora real del comienzo del episodio (no la del envio al servidor).
++        self.event_started_utc = _utc_iso(now - self.event_started_at)
+         self.last_drowsy_at = now
+         self.normal_started_at = None
+         self.recording = True
+@@ -1057,6 +1245,7 @@ class BlackBoxRecorder:
+             estado=self.event_state or "Somnolencia",
+             confianza=self.event_confidence,
+             video_seconds=video_seconds,
++            fecha_hora_utc=getattr(self, "event_started_utc", None) or _utc_iso(),
+         )
+ 
+     def _on_video_finished(
+diff --git a/device_linking.sql b/device_linking.sql
+index 34746b9..abfe53c 100644
+--- a/device_linking.sql
++++ b/device_linking.sql
+@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS dispositivos (
+     linked_at DATETIME NULL,
+     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+     api_key_hash VARCHAR(64) NULL,
++    last_seen_usb DATETIME NULL,
+     INDEX idx_dispositivos_usuario_id (usuario_id),
+     CONSTRAINT fk_dispositivos_usuario
+         FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+@@ -46,5 +47,8 @@ CREATE TABLE IF NOT EXISTS dispositivo_comandos (
+         ON DELETE CASCADE
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+ 
+--- Migración para bases creadas antes de api_key_hash (run.py la aplica sola al arrancar):
++-- Migraciones para bases creadas con versiones anteriores
++-- (run.py las aplica solas al arrancar, no hace falta ejecutarlas a mano):
+ -- ALTER TABLE dispositivos ADD COLUMN api_key_hash VARCHAR(64) NULL;
++-- ALTER TABLE dispositivos ADD COLUMN last_seen_usb DATETIME NULL;
++-- ALTER TABLE detecciones ADD COLUMN dispositivo_id INT NULL;
+diff --git a/esp32_alerta_wifi/config_dispositivo.example.h b/esp32_alerta_wifi/config_dispositivo.example.h
+index aaa9c5e..dafd234 100644
+--- a/esp32_alerta_wifi/config_dispositivo.example.h
++++ b/esp32_alerta_wifi/config_dispositivo.example.h
+@@ -20,4 +20,4 @@
+ // El usuario puede cambiarla desde el portal sin recompilar.
+ #define SERVER_BASE_URL_DEFAULT "http://192.168.1.100:5050"
+ 
+-#define FIRMWARE_VERSION "1.1.0"
++// La versión del firmware se define en esp32_alerta_wifi.ino.
+diff --git a/esp32_alerta_wifi/esp32_alerta_wifi.ino b/esp32_alerta_wifi/esp32_alerta_wifi.ino
+index 025a4ba..088757d 100644
+--- a/esp32_alerta_wifi/esp32_alerta_wifi.ino
++++ b/esp32_alerta_wifi/esp32_alerta_wifi.ino
+@@ -6,17 +6,28 @@
+ #include <WiFiManager.h>  // Librería "WiFiManager" de tzapu
+ #include "mbedtls/md.h"
+ #include <time.h>
++#include <sys/time.h>
+ 
+ // DEVICE_ID, DEVICE_SECRET, SERVER_BASE_URL_DEFAULT y FIRMWARE_VERSION.
+ // Copiá config_dispositivo.example.h como config_dispositivo.h y completalo.
+ #include "config_dispositivo.h"
+ 
++// Versión del firmware: se informa en el heartbeat y se ve en "Mis dispositivos".
++#ifdef FIRMWARE_VERSION
++#undef FIRMWARE_VERSION
++#endif
++#define FIRMWARE_VERSION "1.2.0"
++
+ // Arquitectura:
+ // - La ALARMA se controla por el cable USB (serial), atendido en loop().
+ //   No depende de ninguna red, así que funciona igual dentro del auto.
+ // - El WiFi (heartbeat, comandos web, rutas HTTP, mDNS) corre en una tarea
+ //   aparte del otro núcleo: si la red no está o el servidor tarda, la alarma
+ //   por USB no se demora.
++// - Cada vez que la alarma se enciende o se apaga, el ESP32 guarda el evento
++//   con el canal por el que llegó la orden (USB, WIFI, WEB o SEGURIDAD) y lo
++//   informa al servidor, que lo registra en la base de datos. Si no hay red,
++//   los eventos esperan en una cola y se envían al reconectar.
+ 
+ // Pines reales solicitados:
+ // P23 controla el motor vibrador.
+@@ -46,6 +57,14 @@ const unsigned long WIFI_REINTENTO_MS = 30000;
+ const unsigned long SERVIDOR_REINTENTO_MIN_MS = 5000;
+ const unsigned long SERVIDOR_REINTENTO_MAX_MS = 60000;
+ 
++// La firma HMAC necesita la hora real. Si la red no tiene internet (NTP no
++// responde), se toma la hora del servidor VISION pasado este tiempo.
++const unsigned long HORA_SERVIDOR_ESPERA_MS = 10000;
++const unsigned long HORA_SERVIDOR_REINTENTO_MS = 15000;
++
++// Cola de eventos de alarma pendientes de informar al servidor.
++const int MAX_EVENTOS = 16;
++
+ // Seguridad: la alarma se apaga sola si nadie la vuelve a pedir en este tiempo
+ // (el script la refresca cada 1 s mientras dura la somnolencia). Evita que el
+ // buzzer quede sonando si se cae la PC, el script o la conexión.
+@@ -79,8 +98,20 @@ unsigned long lastCommandPoll = 0;
+ unsigned long proximoIntentoServidor = 0;
+ unsigned long esperaServidorMs = SERVIDOR_REINTENTO_MIN_MS;
+ unsigned long ultimoIntentoWifi = 0;
++unsigned long wifiConectadoDesde = 0;
++unsigned long ultimoIntentoHora = 0;
+ String lineaSerial = "";
+ 
++struct EventoAlarma {
++  bool encendida;
++  char canal[10];
++  unsigned long momento;  // millis() en que ocurrió
++};
++EventoAlarma colaEventos[MAX_EVENTOS];
++int inicioCola = 0;
++int cantidadCola = 0;
++portMUX_TYPE muxEventos = portMUX_INITIALIZER_UNLOCKED;
++
+ String hmacSha256(String message, String key) {
+   byte hmac[32];
+   mbedtls_md_context_t ctx;
+@@ -127,12 +158,53 @@ void aplicarAlarma(bool activar) {
+   Serial.println(activar ? "Alarma ACTIVADA" : "Alarma DESACTIVADA");
+ }
+ 
++// ── Cola de eventos de alarma (se llama desde los dos núcleos) ─────────────
++
++void encolarEvento(bool encendida, const char* canal) {
++  portENTER_CRITICAL(&muxEventos);
++  if (cantidadCola == MAX_EVENTOS) {
++    // Cola llena (mucho tiempo sin red): se descarta el evento más viejo.
++    inicioCola = (inicioCola + 1) % MAX_EVENTOS;
++    cantidadCola--;
++  }
++  int pos = (inicioCola + cantidadCola) % MAX_EVENTOS;
++  colaEventos[pos].encendida = encendida;
++  strncpy(colaEventos[pos].canal, canal, sizeof(colaEventos[pos].canal) - 1);
++  colaEventos[pos].canal[sizeof(colaEventos[pos].canal) - 1] = '\0';
++  colaEventos[pos].momento = millis();
++  cantidadCola++;
++  portEXIT_CRITICAL(&muxEventos);
++}
++
++bool primerEvento(EventoAlarma &evento) {
++  bool hay = false;
++  portENTER_CRITICAL(&muxEventos);
++  if (cantidadCola > 0) {
++    evento = colaEventos[inicioCola];
++    hay = true;
++  }
++  portEXIT_CRITICAL(&muxEventos);
++  return hay;
++}
++
++void quitarPrimerEvento() {
++  portENTER_CRITICAL(&muxEventos);
++  if (cantidadCola > 0) {
++    inicioCola = (inicioCola + 1) % MAX_EVENTOS;
++    cantidadCola--;
++  }
++  portEXIT_CRITICAL(&muxEventos);
++}
++
+ // Punto único para las órdenes externas (USB, rutas HTTP o comandos web):
+ // renueva el tiempo de seguridad y solo cambia los pines si cambia el estado.
+-void ordenarAlarma(bool activar) {
++// Cada cambio queda registrado con el canal por el que llegó la orden.
++void ordenarAlarma(bool activar, const char* canal) {
+   ultimaOrdenAlarma = millis();
+   if (alarmaActiva != activar) {
+     aplicarAlarma(activar);
++    encolarEvento(activar, canal);
++    Serial.printf("[ALARMA] %s por %s\n", activar ? "Encendida" : "Apagada", canal);
+   }
+ }
+ 
+@@ -140,6 +212,7 @@ void revisarSeguridadAlarma() {
+   if (alarmaActiva && millis() - ultimaOrdenAlarma > ALARMA_SIN_REFRESCO_MS) {
+     Serial.println("[SEGURIDAD] Sin órdenes recientes: se apaga la alarma.");
+     aplicarAlarma(false);
++    encolarEvento(false, "SEGURIDAD");
+   }
+ }
+ 
+@@ -149,12 +222,12 @@ void responderEstado() {
+ }
+ 
+ void alertaOn() {
+-  ordenarAlarma(true);
++  ordenarAlarma(true, "WIFI");
+   server.send(200, "text/plain", "Alerta ACTIVADA");
+ }
+ 
+ void alertaOff() {
+-  ordenarAlarma(false);
++  ordenarAlarma(false, "WIFI");
+   server.send(200, "text/plain", "Alerta DESACTIVADA");
+ }
+ 
+@@ -180,10 +253,10 @@ void procesarOrdenSerial(String orden) {
+   if (orden == "PING") {
+     responderSerial("PONG " + String(DEVICE_ID));
+   } else if (orden == "ALERTA_ON") {
+-    ordenarAlarma(true);
++    ordenarAlarma(true, "USB");
+     responderSerial("OK ALERTA_ON");
+   } else if (orden == "ALERTA_OFF") {
+-    ordenarAlarma(false);
++    ordenarAlarma(false, "USB");
+     responderSerial("OK ALERTA_OFF");
+   } else if (orden == "ESTADO") {
+     String wifi = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "SIN_WIFI";
+@@ -400,14 +473,71 @@ int consultarComandos() {
+   }
+ 
+   if (response.indexOf("alert_on") >= 0) {
+-    ordenarAlarma(true);
++    ordenarAlarma(true, "WEB");
+   }
+   if (response.indexOf("alert_off") >= 0) {
+-    ordenarAlarma(false);
++    ordenarAlarma(false, "WEB");
++  }
++  return code;
++}
++
++// Informa al servidor el evento más viejo de la cola (firmado con HMAC).
++int enviarEvento(const EventoAlarma &evento) {
++  String ts = unixTimestamp();
++  String n = nonce();
++  String tipo = evento.encendida ? "alarma_on" : "alarma_off";
++  String canal = String(evento.canal);
++  String haceMs = String(millis() - evento.momento);
++  String payload = String(DEVICE_ID) + "|" + ts + "|" + n + "|" + tipo + "|" + canal + "|" + haceMs;
++  String signature = hmacSha256(payload, DEVICE_SECRET);
++
++  String body = "{";
++  body += "\"device_id\":\"" + String(DEVICE_ID) + "\",";
++  body += "\"ts\":\"" + ts + "\",";
++  body += "\"nonce\":\"" + n + "\",";
++  body += "\"evento\":\"" + tipo + "\",";
++  body += "\"canal\":\"" + canal + "\",";
++  body += "\"hace_ms\":\"" + haceMs + "\",";
++  body += "\"signature\":\"" + signature + "\"";
++  body += "}";
++
++  String response;
++  int code = postJson("/api/esp32/evento", body, response);
++  // Enviado, o rechazado por datos inválidos (no tiene sentido reintentarlo).
++  if (code >= 200 && code < 500) {
++    quitarPrimerEvento();
+   }
+   return code;
+ }
+ 
++// Sin internet no hay NTP: se toma la hora del servidor VISION (misma red).
++void sincronizarHoraConServidor() {
++  HTTPClient http;
++  if (!http.begin(serverBaseUrl + "/api/hora")) {
++    return;
++  }
++  http.setConnectTimeout(2000);
++  http.setTimeout(3000);
++  int code = http.GET();
++  String respuesta = code == 200 ? http.getString() : "";
++  http.end();
++
++  int pos = respuesta.indexOf("\"epoch\"");
++  if (pos < 0) {
++    return;
++  }
++  pos = respuesta.indexOf(':', pos);
++  long epoch = respuesta.substring(pos + 1).toInt();
++  if (epoch < 1700000000L) {
++    return;
++  }
++  struct timeval tv;
++  tv.tv_sec = epoch;
++  tv.tv_usec = 0;
++  settimeofday(&tv, NULL);
++  Serial.println("[HORA] Red sin internet: hora tomada del servidor VISION.");
++}
++
+ // ── Tarea de red (núcleo 0) ─────────────────────────────────────────────────
+ 
+ void tareaRed(void* parametro) {
+@@ -420,6 +550,7 @@ void tareaRed(void* parametro) {
+     // Al (re)conectar se re-anuncia por mDNS y se avisa la IP, que puede cambiar.
+     bool wifiConectado = WiFi.status() == WL_CONNECTED;
+     if (wifiConectado && !wifiEstabaConectado) {
++      wifiConectadoDesde = millis();
+       Serial.print("[WiFi] Conectado. IP del ESP32: ");
+       Serial.println(WiFi.localIP());
+       iniciarMdns();
+@@ -455,14 +586,26 @@ void tareaRed(void* parametro) {
+       }
+ 
+       unsigned long now = millis();
+-      // La firma HMAC necesita la hora real (NTP); sin ella el servidor la rechaza.
++
++      // La firma HMAC necesita la hora real. Si NTP no respondió (red sin
++      // internet), se pide la hora al servidor VISION.
++      if (!horaSincronizada()
++          && now - wifiConectadoDesde >= HORA_SERVIDOR_ESPERA_MS
++          && (ultimoIntentoHora == 0 || now - ultimoIntentoHora >= HORA_SERVIDOR_REINTENTO_MS)) {
++        ultimoIntentoHora = now;
++        sincronizarHoraConServidor();
++      }
++
+       bool servidorDisponible = horaSincronizada()
+         && (proximoIntentoServidor == 0 || now >= proximoIntentoServidor);
++      EventoAlarma evento;
+ 
+       if (servidorDisponible && (heartbeatPendiente || now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS)) {
+         heartbeatPendiente = false;
+         lastHeartbeat = now;
+         registrarRespuestaServidor(enviarHeartbeat());
++      } else if (servidorDisponible && primerEvento(evento)) {
++        registrarRespuestaServidor(enviarEvento(evento));
+       } else if (servidorDisponible && now - lastCommandPoll >= COMMAND_INTERVAL_MS) {
+         lastCommandPoll = now;
+         registrarRespuestaServidor(consultarComandos());
+diff --git a/run.py b/run.py
+index b9e253e..a898c12 100644
+--- a/run.py
++++ b/run.py
+@@ -1,7 +1,7 @@
+ import os
+ 
+ from app import create_app, db, logger
+-from app.models import asegurar_columnas_dispositivos
++from app.models import verificar_esquema
+ from app.services import start_sync_thread
+ 
+ try:
+@@ -18,8 +18,7 @@ app = create_app()
+ def inicializar_mysql():
+     with app.app_context():
+         try:
+-            db.create_all()
+-            asegurar_columnas_dispositivos()
++            verificar_esquema()
+             logger.info('[DB] Tablas MySQL verificadas/creadas.')
+         except Exception as e:
+             logger.error(f'[DB] No se pudo conectar a MySQL al inicio: {e}')
+diff --git a/scripts/create_device.py b/scripts/create_device.py
+index 80a4385..c9432e7 100644
+--- a/scripts/create_device.py
++++ b/scripts/create_device.py
+@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ sys.path.insert(0, str(PROJECT_ROOT))
+ 
+ from app import bcrypt, create_app, db  # noqa: E402
+-from app.models import Dispositivo, asegurar_columnas_dispositivos  # noqa: E402
++from app.models import Dispositivo, verificar_esquema  # noqa: E402
+ 
+ 
+ def build_parser():
+@@ -26,8 +26,7 @@ def main():
+ 
+     app = create_app()
+     with app.app_context():
+-        db.create_all()
+-        asegurar_columnas_dispositivos()
++        verificar_esquema()
+ 
+         if Dispositivo.query.filter_by(device_id=device_id).first():
+             raise SystemExit(f'Ya existe el dispositivo {device_id}')

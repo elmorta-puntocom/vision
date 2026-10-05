@@ -292,7 +292,7 @@
                     <td><span class="pill">{{ row.roles }}</span></td>
                     <td>{{ row.detecciones }}</td>
                     <td><span class="score {{ score_class }}">{{ "%.0f"|format(row.score) }}/100</span></td>
-                    <td>{{ usuario.fecha_registro.strftime('%d/%m/%Y') if usuario.fecha_registro else '—' }}</td>
+                    <td>{{ usuario.fecha_registro|hora_local('%d/%m/%Y') }}</td>
                     <td>
                         <a class="table-action" href="{{ url_for('main.editar_usuario', user_id=usuario.id) }}">
                             Editar
@@ -327,7 +327,7 @@
                 <tr>
                     <td>#{{ det.id }}</td>
                     <td>{{ det.usuario.nombre }} {{ det.usuario.apellido }}</td>
-                    <td>{{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}</td>
+                    <td>{{ det.fecha_hora|hora_local }}</td>
                     <td><span class="pill">{{ det.tipo_evento }}</span></td>
                     <td>{{ "%.2f"|format(det.valor_ear) if det.valor_ear is not none else '—' }}</td>
                     <td>{{ "%.1f"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}°</td>

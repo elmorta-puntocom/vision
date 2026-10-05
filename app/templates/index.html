@@ -849,14 +849,14 @@
 <div class="stats-bar">
     <div class="stat">
         <span class="stat-num">&lt;500ms</span>
-        <span class="stat-label">Tiempo de detección</span>
+        <span class="stat-label">Envío de la alerta al ESP32</span>
     </div>
     <div class="stat">
         <span class="stat-num">10s</span>
         <span class="stat-label">Búfer de evidencia pre-evento</span>
     </div>
     <div class="stat">
-        <span class="stat-num">468</span>
+        <span class="stat-num">478</span>
         <span class="stat-label">Landmarks faciales analizados</span>
     </div>
 </div>
@@ -933,7 +933,7 @@
                 </svg>
             </div>
             <h3>Captura de datos</h3>
-            <p>Cámara (smartphone o IP Gadnic) captura el rostro del conductor con soporte de visión nocturna infrarroja.</p>
+            <p>Una cámara web dedicada captura el rostro del conductor en tiempo real (en el modelo comercial, con iluminación infrarroja).</p>
         </div>
         <div class="card" data-num="02">
             <div class="card-icon">
@@ -942,7 +942,7 @@
                 </svg>
             </div>
             <h3>IA en tiempo real</h3>
-            <p>MediaPipe Face Mesh calcula el EAR (Eye Aspect Ratio) y el ángulo Pitch para detectar micro-sueños y cabeceos.</p>
+            <p>MediaPipe calcula el EAR (Eye Aspect Ratio) y el ángulo Pitch, y una red neuronal confirma los cabeceos, para detectar microsueños.</p>
         </div>
         <div class="card" data-num="03">
             <div class="card-icon">
@@ -951,7 +951,7 @@
                 </svg>
             </div>
             <h3>Alerta persistente</h3>
-            <p>El ESP32 activa buzzer y vibración que no se detienen hasta que la IA confirma que el conductor ha recuperado el estado de alerta.</p>
+            <p>El ESP32 activa buzzer y vibración, que se mantienen mientras la IA detecte signos de somnolencia y se apagan solos cuando el conductor abre los ojos y endereza la cabeza.</p>
         </div>
         <div class="card" data-num="04">
             <div class="card-icon">
@@ -960,7 +960,7 @@
                 </svg>
             </div>
             <h3>Caja negra digital</h3>
-            <p>Cada evento genera un clip de video (10s pre + post) almacenado de forma encriptada en el perfil privado del conductor.</p>
+            <p>Cada evento genera un clip de video (10s pre + post) registrado en el perfil privado del conductor, visible solo con su sesión iniciada.</p>
         </div>
     </div>
 </section>
@@ -980,17 +980,17 @@
         <div class="pipe-step">
             <span class="pipe-num">FASE 02</span>
             <div class="pipe-title">Detección IA</div>
-            <p class="pipe-desc">Si EAR &lt; 0.20 o Pitch &gt; 30° por más de 1.5s consecutivos → Evento confirmado.</p>
+            <p class="pipe-desc">Si EAR &lt; 0.22 durante 0,5 s (o &lt; 0.28 durante 1,2 s), o un cabeceo de 18° o más dura 1,2 s, y se mantiene 0,75 s más → Evento confirmado.</p>
         </div>
         <div class="pipe-step">
             <span class="pipe-num">FASE 03</span>
             <div class="pipe-title">Actuación</div>
-            <p class="pipe-desc">ESP32 activa buzzer y motor vibrador. La alarma persiste hasta confirmar reacción real.</p>
+            <p class="pipe-desc">ESP32 activa buzzer y motor vibrador (por USB o, de respaldo, WiFi). La alarma se mantiene mientras persisten los signos de somnolencia.</p>
         </div>
         <div class="pipe-step">
             <span class="pipe-num">FASE 04</span>
             <div class="pipe-title">Registro</div>
-            <p class="pipe-desc">Video concatenado sube al servidor Flask, vinculado al user_id del conductor autenticado.</p>
+            <p class="pipe-desc">El video se guarda en el equipo y el evento se registra en el servidor Flask (o en SQLite si no hay conexión), vinculado al conductor.</p>
         </div>
     </div>
 </section>

@@ -483,6 +483,9 @@
             <a class="dash-action-btn" href="{{ url_for('main.editar_usuario', user_id=current_user.id) }}">
                 Modificar usuario
             </a>
+            <a class="dash-action-btn outline" href="{{ url_for('main.historial') }}">
+                Historial y gráficos
+            </a>
             <a class="dash-action-btn outline" href="{{ url_for('main.dispositivos') }}">
                 Mis dispositivos
             </a>
@@ -518,13 +521,16 @@
         </div>
     </div>
 
+    <!-- Datos para el estado en vivo (static/js/panel_vivo.js) -->
+    <div id="panel-vivo" hidden data-url="{{ url_for('main.api_panel_estado') }}"></div>
+
     <!-- Banner de sincronización -->
     {% if pendientes_count and pendientes_count > 0 %}
     <div class="sync-banner">
         <span class="sync-icon">⟳</span>
         <span>
             <strong>{{ pendientes_count }} detección{{ 'es' if pendientes_count != 1 else '' }} pendiente{{ 's' if pendientes_count != 1 else '' }} de sincronizar.</strong>
-            Estos registros se guardaron sin conexión y se subirán automáticamente al detectar WiFi.
+            Se guardaron en la base offline (SQLite) porque MySQL no respondía y se subirán solos a MySQL cuando vuelva la conexión.
         </span>
     </div>
     {% else %}
@@ -560,12 +566,20 @@
             </div>
         </div>
         <div class="dash-stat">
-            <span class="dash-stat-label">Estado del sistema</span>
-            <div class="dash-stat-val" style="color: var(--success); font-size:1.15rem; margin-top:0.4rem; display: flex; align-items: center; gap: 0.5rem;">
-                <span style="width: 10px; height: 10px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px var(--success); display: inline-block;"></span>
-                SISTEMA OPERATIVO
+            <span class="dash-stat-label">Estado del dispositivo</span>
+            {% set conectados = estados.values()|selectattr('online')|list %}
+            <div id="resumen-dispositivos" class="estado-vivo {{ '' if conectados else 'offline' }}">
+                {% if not dispositivos %}
+                    Sin dispositivos vinculados
+                {% elif conectados %}
+                    Online · {% for e in conectados %}{{ e.device_id }} ({{ e.canales|join(' + ') }}){{ ', ' if not loop.last }}{% endfor %}
+                {% else %}
+                    Offline · ningún ESP32 conectado
+                {% endif %}
             </div>
-            <div class="dash-stat-sub">Servidor y base de datos conectados</div>
+            <div id="estado-servidor" class="dash-stat-sub estado-servidor">
+                <span data-texto>Servidor y base de datos conectados</span>
+            </div>
         </div>
     </div>
 
@@ -599,14 +613,14 @@
             <div class="account-field">
                 <label>Fecha de registro</label>
                 <div class="val" style="font-family: var(--font-mono); font-size:0.85rem;">
-                    {{ current_user.fecha_registro.strftime('%d/%m/%Y') }}
+                    {{ current_user.fecha_registro|hora_local('%d/%m/%Y') }}
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Detections history -->
-    <div class="section-label" style="margin-top: 2.5rem;">Caja Negra Digital — Historial de Detecciones</div>
+    <div class="section-label" style="margin-top: 2.5rem;">Caja Negra Digital — Últimas 20 detecciones · <a href="{{ url_for('main.historial') }}" style="color: var(--accent);">ver historial completo con filtros</a></div>
 
     {% if detecciones %}
     <div class="table-container">
@@ -624,7 +638,7 @@
             <tbody>
                 {% for det in detecciones %}
                 <tr>
-                    <td>{{ det.fecha_hora.strftime('%d/%m/%Y %H:%M:%S') }}</td>
+                    <td>{{ det.fecha_hora|hora_local }}</td>
                     <td>
                         {% if det.tipo_evento == 'Ojos Cerrados' %}
                             <span class="badge badge-ojos">Ojos Cerrados</span>
@@ -657,9 +671,13 @@
         <h3>Sin eventos registrados</h3>
         <p>
             Cuando el sistema detecte un evento de somnolencia o cabeceo,<br>
-            el clip de video aparecerá aquí de forma privada y encriptada.
+            el clip de video aparecerá aquí de forma privada: solo tu cuenta puede verlo.
         </p>
     </div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/panel_vivo.js') }}"></script>
 {% endblock %}

@@ -6,10 +6,17 @@
 #include <WiFiManager.h>  // Librería "WiFiManager" de tzapu
 #include "mbedtls/md.h"
 #include <time.h>
+#include <sys/time.h>
 
 // DEVICE_ID, DEVICE_SECRET, SERVER_BASE_URL_DEFAULT y FIRMWARE_VERSION.
 // Copiá config_dispositivo.example.h como config_dispositivo.h y completalo.
 #include "config_dispositivo.h"
+
+// Versión del firmware: se informa en el heartbeat y se ve en "Mis dispositivos".
+#ifdef FIRMWARE_VERSION
+#undef FIRMWARE_VERSION
+#endif
+#define FIRMWARE_VERSION "1.2.0"
 
 // Arquitectura:
 // - La ALARMA se controla por el cable USB (serial), atendido en loop().
@@ -17,6 +24,10 @@
 // - El WiFi (heartbeat, comandos web, rutas HTTP, mDNS) corre en una tarea
 //   aparte del otro núcleo: si la red no está o el servidor tarda, la alarma
 //   por USB no se demora.
+// - Cada vez que la alarma se enciende o se apaga, el ESP32 guarda el evento
+//   con el canal por el que llegó la orden (USB, WIFI, WEB o SEGURIDAD) y lo
+//   informa al servidor, que lo registra en la base de datos. Si no hay red,
+//   los eventos esperan en una cola y se envían al reconectar.
 
 // Pines reales solicitados:
 // P23 controla el motor vibrador.
@@ -45,6 +56,14 @@ const unsigned long WIFI_REINTENTO_MS = 30000;
 // Si el servidor no responde se espera cada vez más antes de reintentar.
 const unsigned long SERVIDOR_REINTENTO_MIN_MS = 5000;
 const unsigned long SERVIDOR_REINTENTO_MAX_MS = 60000;
+
+// La firma HMAC necesita la hora real. Si la red no tiene internet (NTP no
+// responde), se toma la hora del servidor VISION pasado este tiempo.
+const unsigned long HORA_SERVIDOR_ESPERA_MS = 10000;
+const unsigned long HORA_SERVIDOR_REINTENTO_MS = 15000;
+
+// Cola de eventos de alarma pendientes de informar al servidor.
+const int MAX_EVENTOS = 16;
 
 // Seguridad: la alarma se apaga sola si nadie la vuelve a pedir en este tiempo
 // (el script la refresca cada 1 s mientras dura la somnolencia). Evita que el
@@ -79,7 +98,19 @@ unsigned long lastCommandPoll = 0;
 unsigned long proximoIntentoServidor = 0;
 unsigned long esperaServidorMs = SERVIDOR_REINTENTO_MIN_MS;
 unsigned long ultimoIntentoWifi = 0;
+unsigned long wifiConectadoDesde = 0;
+unsigned long ultimoIntentoHora = 0;
 String lineaSerial = "";
+
+struct EventoAlarma {
+  bool encendida;
+  char canal[10];
+  unsigned long momento;  // millis() en que ocurrió
+};
+EventoAlarma colaEventos[MAX_EVENTOS];
+int inicioCola = 0;
+int cantidadCola = 0;
+portMUX_TYPE muxEventos = portMUX_INITIALIZER_UNLOCKED;
 
 String hmacSha256(String message, String key) {
   byte hmac[32];
@@ -127,12 +158,53 @@ void aplicarAlarma(bool activar) {
   Serial.println(activar ? "Alarma ACTIVADA" : "Alarma DESACTIVADA");
 }
 
+// ── Cola de eventos de alarma (se llama desde los dos núcleos) ─────────────
+
+void encolarEvento(bool encendida, const char* canal) {
+  portENTER_CRITICAL(&muxEventos);
+  if (cantidadCola == MAX_EVENTOS) {
+    // Cola llena (mucho tiempo sin red): se descarta el evento más viejo.
+    inicioCola = (inicioCola + 1) % MAX_EVENTOS;
+    cantidadCola--;
+  }
+  int pos = (inicioCola + cantidadCola) % MAX_EVENTOS;
+  colaEventos[pos].encendida = encendida;
+  strncpy(colaEventos[pos].canal, canal, sizeof(colaEventos[pos].canal) - 1);
+  colaEventos[pos].canal[sizeof(colaEventos[pos].canal) - 1] = '\0';
+  colaEventos[pos].momento = millis();
+  cantidadCola++;
+  portEXIT_CRITICAL(&muxEventos);
+}
+
+bool primerEvento(EventoAlarma &evento) {
+  bool hay = false;
+  portENTER_CRITICAL(&muxEventos);
+  if (cantidadCola > 0) {
+    evento = colaEventos[inicioCola];
+    hay = true;
+  }
+  portEXIT_CRITICAL(&muxEventos);
+  return hay;
+}
+
+void quitarPrimerEvento() {
+  portENTER_CRITICAL(&muxEventos);
+  if (cantidadCola > 0) {
+    inicioCola = (inicioCola + 1) % MAX_EVENTOS;
+    cantidadCola--;
+  }
+  portEXIT_CRITICAL(&muxEventos);
+}
+
 // Punto único para las órdenes externas (USB, rutas HTTP o comandos web):
 // renueva el tiempo de seguridad y solo cambia los pines si cambia el estado.
-void ordenarAlarma(bool activar) {
+// Cada cambio queda registrado con el canal por el que llegó la orden.
+void ordenarAlarma(bool activar, const char* canal) {
   ultimaOrdenAlarma = millis();
   if (alarmaActiva != activar) {
     aplicarAlarma(activar);
+    encolarEvento(activar, canal);
+    Serial.printf("[ALARMA] %s por %s\n", activar ? "Encendida" : "Apagada", canal);
   }
 }
 
@@ -140,6 +212,7 @@ void revisarSeguridadAlarma() {
   if (alarmaActiva && millis() - ultimaOrdenAlarma > ALARMA_SIN_REFRESCO_MS) {
     Serial.println("[SEGURIDAD] Sin órdenes recientes: se apaga la alarma.");
     aplicarAlarma(false);
+    encolarEvento(false, "SEGURIDAD");
   }
 }
 
@@ -149,12 +222,12 @@ void responderEstado() {
 }
 
 void alertaOn() {
-  ordenarAlarma(true);
+  ordenarAlarma(true, "WIFI");
   server.send(200, "text/plain", "Alerta ACTIVADA");
 }
 
 void alertaOff() {
-  ordenarAlarma(false);
+  ordenarAlarma(false, "WIFI");
   server.send(200, "text/plain", "Alerta DESACTIVADA");
 }
 
@@ -180,10 +253,10 @@ void procesarOrdenSerial(String orden) {
   if (orden == "PING") {
     responderSerial("PONG " + String(DEVICE_ID));
   } else if (orden == "ALERTA_ON") {
-    ordenarAlarma(true);
+    ordenarAlarma(true, "USB");
     responderSerial("OK ALERTA_ON");
   } else if (orden == "ALERTA_OFF") {
-    ordenarAlarma(false);
+    ordenarAlarma(false, "USB");
     responderSerial("OK ALERTA_OFF");
   } else if (orden == "ESTADO") {
     String wifi = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "SIN_WIFI";
@@ -400,12 +473,69 @@ int consultarComandos() {
   }
 
   if (response.indexOf("alert_on") >= 0) {
-    ordenarAlarma(true);
+    ordenarAlarma(true, "WEB");
   }
   if (response.indexOf("alert_off") >= 0) {
-    ordenarAlarma(false);
+    ordenarAlarma(false, "WEB");
   }
   return code;
+}
+
+// Informa al servidor el evento más viejo de la cola (firmado con HMAC).
+int enviarEvento(const EventoAlarma &evento) {
+  String ts = unixTimestamp();
+  String n = nonce();
+  String tipo = evento.encendida ? "alarma_on" : "alarma_off";
+  String canal = String(evento.canal);
+  String haceMs = String(millis() - evento.momento);
+  String payload = String(DEVICE_ID) + "|" + ts + "|" + n + "|" + tipo + "|" + canal + "|" + haceMs;
+  String signature = hmacSha256(payload, DEVICE_SECRET);
+
+  String body = "{";
+  body += "\"device_id\":\"" + String(DEVICE_ID) + "\",";
+  body += "\"ts\":\"" + ts + "\",";
+  body += "\"nonce\":\"" + n + "\",";
+  body += "\"evento\":\"" + tipo + "\",";
+  body += "\"canal\":\"" + canal + "\",";
+  body += "\"hace_ms\":\"" + haceMs + "\",";
+  body += "\"signature\":\"" + signature + "\"";
+  body += "}";
+
+  String response;
+  int code = postJson("/api/esp32/evento", body, response);
+  // Enviado, o rechazado por datos inválidos (no tiene sentido reintentarlo).
+  if (code >= 200 && code < 500) {
+    quitarPrimerEvento();
+  }
+  return code;
+}
+
+// Sin internet no hay NTP: se toma la hora del servidor VISION (misma red).
+void sincronizarHoraConServidor() {
+  HTTPClient http;
+  if (!http.begin(serverBaseUrl + "/api/hora")) {
+    return;
+  }
+  http.setConnectTimeout(2000);
+  http.setTimeout(3000);
+  int code = http.GET();
+  String respuesta = code == 200 ? http.getString() : "";
+  http.end();
+
+  int pos = respuesta.indexOf("\"epoch\"");
+  if (pos < 0) {
+    return;
+  }
+  pos = respuesta.indexOf(':', pos);
+  long epoch = respuesta.substring(pos + 1).toInt();
+  if (epoch < 1700000000L) {
+    return;
+  }
+  struct timeval tv;
+  tv.tv_sec = epoch;
+  tv.tv_usec = 0;
+  settimeofday(&tv, NULL);
+  Serial.println("[HORA] Red sin internet: hora tomada del servidor VISION.");
 }
 
 // ── Tarea de red (núcleo 0) ─────────────────────────────────────────────────
@@ -420,6 +550,7 @@ void tareaRed(void* parametro) {
     // Al (re)conectar se re-anuncia por mDNS y se avisa la IP, que puede cambiar.
     bool wifiConectado = WiFi.status() == WL_CONNECTED;
     if (wifiConectado && !wifiEstabaConectado) {
+      wifiConectadoDesde = millis();
       Serial.print("[WiFi] Conectado. IP del ESP32: ");
       Serial.println(WiFi.localIP());
       iniciarMdns();
@@ -455,14 +586,26 @@ void tareaRed(void* parametro) {
       }
 
       unsigned long now = millis();
-      // La firma HMAC necesita la hora real (NTP); sin ella el servidor la rechaza.
+
+      // La firma HMAC necesita la hora real. Si NTP no respondió (red sin
+      // internet), se pide la hora al servidor VISION.
+      if (!horaSincronizada()
+          && now - wifiConectadoDesde >= HORA_SERVIDOR_ESPERA_MS
+          && (ultimoIntentoHora == 0 || now - ultimoIntentoHora >= HORA_SERVIDOR_REINTENTO_MS)) {
+        ultimoIntentoHora = now;
+        sincronizarHoraConServidor();
+      }
+
       bool servidorDisponible = horaSincronizada()
         && (proximoIntentoServidor == 0 || now >= proximoIntentoServidor);
+      EventoAlarma evento;
 
       if (servidorDisponible && (heartbeatPendiente || now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS)) {
         heartbeatPendiente = false;
         lastHeartbeat = now;
         registrarRespuestaServidor(enviarHeartbeat());
+      } else if (servidorDisponible && primerEvento(evento)) {
+        registrarRespuestaServidor(enviarEvento(evento));
       } else if (servidorDisponible && now - lastCommandPoll >= COMMAND_INTERVAL_MS) {
         lastCommandPoll = now;
         registrarRespuestaServidor(consultarComandos());

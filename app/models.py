@@ -88,6 +88,15 @@ class Deteccion(db.Model):
     valor_ear = db.Column(db.Float)
     valor_pitch = db.Column(db.Float)
     duracion_alerta = db.Column(db.Float)
+    # ESP32 desde el que se reportó el evento (permite filtrar el historial
+    # por dispositivo). Queda en NULL en los registros anteriores a este campo.
+    dispositivo_id = db.Column(
+        db.Integer,
+        db.ForeignKey('dispositivos.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+
+    dispositivo = db.relationship('Dispositivo')
 
 
 class EstadisticaSeguridad(db.Model):
@@ -131,21 +140,62 @@ class Dispositivo(db.Model):
     # Se regenera en cada descarga de configuración y se borra al revincular.
     api_key_hash = db.Column(db.String(64))
 
+    # Última vez que el programa de detección de la notebook informó que el
+    # ESP32 le responde por el cable USB (para el estado Online/Offline).
+    last_seen_usb = db.Column(db.DateTime)
 
-def asegurar_columnas_dispositivos():
+
+# Columnas agregadas después de la primera versión de cada tabla.
+# db.create_all() no modifica tablas existentes, así que se agregan a mano.
+COLUMNAS_NUEVAS = {
+    'dispositivos': {
+        'api_key_hash': 'VARCHAR(64) NULL',
+        'last_seen_usb': 'DATETIME NULL',
+    },
+    'detecciones': {
+        'dispositivo_id': 'INT NULL',
+    },
+}
+
+
+def asegurar_columnas():
     """
-    db.create_all() no agrega columnas a tablas existentes: agrega las que
-    falten en `dispositivos` para no romper instalaciones previas.
-    Debe llamarse dentro de un app_context.
+    Agrega las columnas que falten en tablas creadas con versiones anteriores
+    del proyecto, para no tener que borrar la base. Debe llamarse dentro de
+    un app_context.
     """
     inspector = db.inspect(db.engine)
-    if 'dispositivos' not in inspector.get_table_names():
-        return
+    tablas = set(inspector.get_table_names())
 
-    columnas = {col['name'] for col in inspector.get_columns('dispositivos')}
-    if 'api_key_hash' not in columnas:
-        with db.engine.begin() as conn:
-            conn.execute(db.text('ALTER TABLE dispositivos ADD COLUMN api_key_hash VARCHAR(64) NULL'))
+    for tabla, columnas in COLUMNAS_NUEVAS.items():
+        if tabla not in tablas:
+            continue
+        existentes = {col['name'] for col in inspector.get_columns(tabla)}
+        for nombre, definicion in columnas.items():
+            if nombre in existentes:
+                continue
+            with db.engine.begin() as conn:
+                conn.execute(db.text(f'ALTER TABLE {tabla} ADD COLUMN {nombre} {definicion}'))
+
+
+# Nombre anterior, se mantiene por compatibilidad con scripts viejos.
+asegurar_columnas_dispositivos = asegurar_columnas
+
+_esquema_verificado = False
+
+
+def verificar_esquema():
+    """
+    Crea tablas y agrega columnas faltantes una sola vez por proceso.
+    Si MySQL no está disponible lanza la excepción y se reintenta en la
+    siguiente request (así funciona aunque XAMPP se inicie después que Flask).
+    """
+    global _esquema_verificado
+    if _esquema_verificado:
+        return
+    db.create_all()
+    asegurar_columnas()
+    _esquema_verificado = True
 
 
 class DispositivoEvento(db.Model):

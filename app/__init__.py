@@ -1,5 +1,7 @@
 import logging
 import os
+import time
+from datetime import timedelta
 from pathlib import Path
 
 from flask import Flask
@@ -74,13 +76,23 @@ def create_app():
     app.config['VISION_PUBLIC_URL'] = os.environ.get('VISION_PUBLIC_URL', '')
     app.config['MP_ACCESS_TOKEN'] = os.environ.get('MP_ACCESS_TOKEN', '')
     app.config['MP_PUBLIC_KEY'] = os.environ.get('MP_PUBLIC_KEY', '')
-    app.config['SQLALCHEMY_DATABASE_URI'] = mysql_uri
+    # DATABASE_URL permite usar otra base (por ejemplo SQLite para pruebas);
+    # si no se define se usa el MySQL de XAMPP como siempre.
+    database_url = os.environ.get('DATABASE_URL', '').strip()
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url or mysql_uri
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_pre_ping': True,
-        'pool_recycle': 300,
-        'connect_args': {'connect_timeout': 5},
-    }
+    if not database_url:
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+            'pool_pre_ping': True,
+            'pool_recycle': 300,
+            'connect_args': {'connect_timeout': 5},
+        }
+
+    # La base guarda las fechas en UTC; la web las muestra en hora argentina
+    # (UTC-3, sin horario de verano). Se puede cambiar con VISION_UTC_OFFSET_HORAS.
+    app.config['UTC_OFFSET'] = timedelta(
+        hours=float(os.environ.get('VISION_UTC_OFFSET_HORAS', '-3'))
+    )
     app.config['OFFLINE_SQLITE_URI'] = os.environ.get(
         'OFFLINE_SQLITE_URI',
         _default_offline_sqlite_uri(),
@@ -100,7 +112,29 @@ def create_app():
     login_manager.init_app(app)
     mail.init_app(app)          # ← ahora va junto con las otras extensiones
 
-    from .models import Usuario
+    from .models import Usuario, verificar_esquema
+
+    @app.template_filter('hora_local')
+    def hora_local(valor, formato='%d/%m/%Y %H:%M:%S'):
+        """Convierte una fecha UTC de la base a hora local para mostrarla."""
+        if not valor:
+            return '—'
+        return (valor + app.config['UTC_OFFSET']).strftime(formato)
+
+    reintento_esquema = {'proximo': 0.0}
+
+    @app.before_request
+    def _esquema_al_dia():
+        # Si MySQL no responde se ignora (las rutas ya manejan el modo offline)
+        # y no se vuelve a probar hasta dentro de 30 s, para no demorar cada página.
+        ahora = time.monotonic()
+        if ahora < reintento_esquema['proximo']:
+            return
+        try:
+            verificar_esquema()
+        except Exception:
+            db.session.rollback()
+            reintento_esquema['proximo'] = ahora + 30.0
 
     @login_manager.user_loader
     def load_user(uid):

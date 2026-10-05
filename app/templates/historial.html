@@ -1,0 +1,238 @@
+{% extends 'base.html' %}
+
+{% block title %}Historial — Vision{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .historial { padding: 4rem 5rem 5rem; max-width: 1280px; margin: 0 auto; }
+
+    .hist-header { margin-bottom: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1.75rem; }
+    .hist-kicker {
+        font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.2em;
+        text-transform: uppercase; color: var(--accent); margin-bottom: 0.5rem;
+    }
+    .hist-title { font-size: 2rem; font-weight: 800; }
+    .hist-sub { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted); margin-top: 0.4rem; }
+
+    .section-label {
+        font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.22em;
+        text-transform: uppercase; color: var(--text-muted); margin: 2.5rem 0 1.25rem;
+        display: flex; align-items: center; gap: 0.85rem;
+    }
+    .section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    /* Filtros */
+    .filtros {
+        display: grid; grid-template-columns: repeat(4, 1fr) auto; gap: 1rem; align-items: end;
+        background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 1.5rem;
+    }
+    .filtro label {
+        display: block; font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.15em;
+        text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.45rem;
+    }
+    .filtro input, .filtro select {
+        width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+        color: var(--text); font-family: var(--font-mono); font-size: 0.8rem; padding: 0.7rem 0.8rem;
+        color-scheme: dark;
+    }
+    .filtro input:focus, .filtro select:focus { outline: none; border-color: var(--accent); }
+    .filtro-acciones { display: flex; gap: 0.6rem; }
+    .btn {
+        border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent);
+        color: var(--bg); font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.14em;
+        text-transform: uppercase; font-weight: 700; padding: 0.75rem 1.1rem; cursor: pointer;
+        text-decoration: none; white-space: nowrap;
+    }
+    .btn.secundario { background: transparent; color: var(--accent); border-color: rgba(0,229,255,0.3); }
+
+    /* Gráficos (barras en CSS: funcionan sin internet) */
+    .graficos { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; }
+    .grafico {
+        background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 1.5rem;
+    }
+    .grafico h3 {
+        font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.15em;
+        text-transform: uppercase; color: var(--text-muted); margin-bottom: 1.25rem; font-weight: 400;
+    }
+    .barras-dias { display: flex; align-items: flex-end; gap: 4px; height: 180px; }
+    .barra-dia { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
+    .barra-dia .valor { font-family: var(--font-mono); font-size: 0.6rem; color: var(--text); margin-bottom: 0.2rem; }
+    .barra-dia .columna {
+        width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px;
+        box-shadow: 0 0 10px rgba(0,229,255,0.35);
+    }
+    .barra-dia .columna.vacia { background: var(--border); box-shadow: none; }
+    .barra-dia .etiqueta {
+        font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); margin-top: 0.35rem;
+        writing-mode: vertical-rl; transform: rotate(180deg); height: 2.6rem;
+    }
+    .barra-tipo { margin-bottom: 1rem; }
+    .barra-tipo .fila { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 0.72rem; margin-bottom: 0.35rem; }
+    .barra-tipo .pista { background: var(--border); height: 10px; border-radius: 5px; overflow: hidden; }
+    .barra-tipo .relleno { height: 100%; border-radius: 5px; }
+    .relleno.ojos { background: var(--danger); }
+    .relleno.cabeceo { background: var(--warning); }
+    .relleno.ambos { background: var(--accent); }
+
+    /* Tabla (mismo estilo que el dashboard) */
+    .table-container { border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
+    .detections-table { width: 100%; border-collapse: collapse; background: var(--surface); }
+    .detections-table th {
+        font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.16em; text-transform: uppercase;
+        color: var(--text-muted); text-align: left; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
+        background: var(--surface2);
+    }
+    .detections-table td {
+        font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-mid);
+        padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--border);
+    }
+    .detections-table tr:last-child td { border-bottom: none; }
+    .badge {
+        display: inline-block; padding: 0.25rem 0.7rem; font-family: var(--font-mono); font-size: 0.65rem;
+        letter-spacing: 0.12em; text-transform: uppercase; border-radius: 2px; font-weight: 700;
+    }
+    .badge-ojos    { background: rgba(255,59,107,0.12); color: var(--danger); border: 1px solid rgba(255,59,107,0.4); }
+    .badge-cabeceo { background: rgba(255,170,0,0.12);  color: var(--warning); border: 1px solid rgba(255,170,0,0.4); }
+    .badge-ambos   { background: rgba(0,229,255,0.12);  color: var(--accent);  border: 1px solid rgba(0,229,255,0.3); }
+    .video-link {
+        color: var(--accent); font-size: 0.75rem; text-decoration: none; padding: 0.3rem 0.75rem;
+        border: 1px solid rgba(0,229,255,0.3); border-radius: var(--radius);
+    }
+    .empty-state {
+        background: var(--surface); border: 1px solid var(--border); padding: 3.5rem 2rem; text-align: center;
+        border-radius: var(--radius); font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted);
+    }
+
+    @media (max-width: 1000px) {
+        .historial { padding: 3rem 1.25rem; }
+        .filtros { grid-template-columns: 1fr 1fr; }
+        .graficos { grid-template-columns: 1fr; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="historial">
+    <div class="hist-header">
+        <div class="hist-kicker">// Caja negra digital</div>
+        <h1 class="hist-title">Historial de detecciones</h1>
+        <div class="hist-sub">
+            {{ total }} detección{{ 'es' if total != 1 }} con los filtros aplicados
+            {% if total > limite %} · se muestran las {{ limite }} más recientes{% endif %}
+            · horario de Argentina
+        </div>
+    </div>
+
+    <form class="filtros" method="GET" action="{{ url_for('main.historial') }}">
+        <div class="filtro">
+            <label for="desde">Desde</label>
+            <input type="date" id="desde" name="desde" value="{{ filtros.desde }}">
+        </div>
+        <div class="filtro">
+            <label for="hasta">Hasta</label>
+            <input type="date" id="hasta" name="hasta" value="{{ filtros.hasta }}">
+        </div>
+        <div class="filtro">
+            <label for="tipo">Tipo de evento</label>
+            <select id="tipo" name="tipo">
+                <option value="">Todos</option>
+                {% for t in tipos %}
+                <option value="{{ t }}" {% if filtros.tipo == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filtro">
+            <label for="dispositivo">Dispositivo</label>
+            <select id="dispositivo" name="dispositivo">
+                <option value="">Todos</option>
+                {% for d in dispositivos %}
+                <option value="{{ d.id }}" {% if filtros.dispositivo == d.id|string %}selected{% endif %}>{{ d.device_id }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filtro-acciones">
+            <button class="btn" type="submit">Filtrar</button>
+            <a class="btn secundario" href="{{ url_for('main.historial') }}">Limpiar</a>
+        </div>
+    </form>
+
+    <div class="section-label">Gráficos</div>
+    <div class="graficos">
+        <div class="grafico">
+            <h3>Detecciones por día ({{ grafico_dias[0].etiqueta }} al {{ grafico_dias[-1].etiqueta }})</h3>
+            <div class="barras-dias">
+                {% for g in grafico_dias %}
+                <div class="barra-dia" title="{{ g.etiqueta }}: {{ g.cantidad }}">
+                    {% if g.cantidad %}<span class="valor">{{ g.cantidad }}</span>{% endif %}
+                    <div class="columna {{ 'vacia' if not g.cantidad }}"
+                         style="height: {{ (g.cantidad / max_dia * 100)|round(1) if g.cantidad else 1 }}%;"></div>
+                    <span class="etiqueta">{{ g.etiqueta }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="grafico">
+            <h3>Por tipo de evento</h3>
+            {% for g in grafico_tipos %}
+            <div class="barra-tipo">
+                <div class="fila"><span>{{ g.nombre }}</span><span>{{ g.cantidad }}</span></div>
+                <div class="pista">
+                    <div class="relleno {{ 'ojos' if g.nombre == 'Ojos Cerrados' else ('cabeceo' if g.nombre == 'Cabeceo' else 'ambos') }}"
+                         style="width: {{ (g.cantidad / max_tipo * 100)|round(1) }}%;"></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="section-label">Detalle</div>
+    {% if detecciones %}
+    <div class="table-container">
+        <table class="detections-table">
+            <thead>
+                <tr>
+                    <th>Fecha y hora</th>
+                    <th>Tipo de evento</th>
+                    <th>Dispositivo</th>
+                    <th>EAR (ojos)</th>
+                    <th>Pitch (cabeceo)</th>
+                    <th>Duración alerta</th>
+                    <th>Evidencia</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for det in detecciones %}
+                <tr>
+                    <td>{{ det.fecha_hora|hora_local }}</td>
+                    <td>
+                        {% if det.tipo_evento == 'Ojos Cerrados' %}
+                            <span class="badge badge-ojos">Ojos Cerrados</span>
+                        {% elif det.tipo_evento == 'Cabeceo' %}
+                            <span class="badge badge-cabeceo">Cabeceo</span>
+                        {% else %}
+                            <span class="badge badge-ambos">Ambos</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ det.dispositivo.device_id if det.dispositivo else '—' }}</td>
+                    <td>{{ "%.2f"|format(det.valor_ear) if det.valor_ear is not none else '—' }}</td>
+                    <td>{{ "%.1f°"|format(det.valor_pitch) if det.valor_pitch is not none else '—' }}</td>
+                    <td>{{ "%.1f s"|format(det.duracion_alerta) if det.duracion_alerta is not none else '—' }}</td>
+                    <td>
+                        {% if det.video_path and det.video_path != 'sin_video' %}
+                        <a href="{{ url_for('main.serve_video', det_id=det.id) }}" class="video-link">▶ Ver clip</a>
+                        {% else %}
+                        <span style="color: var(--text-muted); font-size: 0.72rem;">Sin clip</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">No hay detecciones que coincidan con los filtros.</div>
+    {% endif %}
+</div>
+{% endblock %}

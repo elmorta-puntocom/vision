@@ -245,6 +245,20 @@
             footer { flex-direction: column; gap: 0.75rem; text-align: center; }
         }
     </style>
+    <style>
+        /* ── Estado Online/Offline en vivo (static/js/panel_vivo.js) ── */
+        .estado-vivo {
+            font-family: var(--font-mono); font-size: 0.95rem; font-weight: 700;
+            color: var(--success); margin-top: 0.4rem;
+            display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+        }
+        .estado-vivo::before {
+            content: ''; width: 10px; height: 10px; border-radius: 50%;
+            background: currentColor; box-shadow: 0 0 10px currentColor; flex: none;
+        }
+        .estado-vivo.offline { color: var(--danger); }
+        .estado-servidor.offline { color: var(--danger); }
+    </style>
     {% block extra_styles %}{% endblock %}
 </head>
 <body>
@@ -264,6 +278,7 @@
         <a href="{{ url_for('main.index') }}#tecnologia" class="nav-link">Tecnología</a>
         {% if current_user.is_authenticated %}
             <a href="{{ url_for('main.dashboard') }}" class="nav-link">Dashboard</a>
+            <a href="{{ url_for('main.historial') }}" class="nav-link">Historial</a>
             <a href="{{ url_for('main.dispositivos') }}" class="nav-link">Dispositivos</a>
             <a href="{{ url_for('main.logout') }}" class="nav-btn">Cerrar sesión</a>
         {% else %}
