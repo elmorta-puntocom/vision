@@ -16,7 +16,7 @@
 #ifdef FIRMWARE_VERSION
 #undef FIRMWARE_VERSION
 #endif
-#define FIRMWARE_VERSION "1.2.0"
+#define FIRMWARE_VERSION "1.2.1"
 
 // Arquitectura:
 // - La ALARMA se controla por el cable USB (serial), atendido en loop().
@@ -101,6 +101,8 @@ unsigned long ultimoIntentoWifi = 0;
 unsigned long wifiConectadoDesde = 0;
 unsigned long ultimoIntentoHora = 0;
 String lineaSerial = "";
+// Se decide en setup() y lo usa la tarea de red al iniciar el WiFi.
+bool portalForzado = false;
 
 struct EventoAlarma {
   bool encendida;
@@ -541,6 +543,12 @@ void sincronizarHoraConServidor() {
 // ── Tarea de red (núcleo 0) ─────────────────────────────────────────────────
 
 void tareaRed(void* parametro) {
+  // El WiFi se inicia acá (núcleo 0) y no en setup(): abrir el portal tarda
+  // 1 a 2 segundos y, mientras tanto, el cable USB ya tiene que responder.
+  iniciarWifi(portalForzado);
+  // La hora se sincroniza sola cuando haya internet; no se espera acá.
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
   for (;;) {
     if (wifiManager.getConfigPortalActive()) {
       wifiManager.process();
@@ -628,15 +636,10 @@ void setup() {
   preferencias.begin("vision", false);
   serverBaseUrl = preferencias.getString("server_url", SERVER_BASE_URL_DEFAULT);
 
-  bool resetPedido = botonResetMantenido();
-  if (resetPedido) {
+  portalForzado = botonResetMantenido();
+  if (portalForzado) {
     borrarConfiguracionRed();
   }
-
-  iniciarWifi(resetPedido);
-
-  // La hora se sincroniza sola cuando haya internet; no se espera acá.
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
   server.on("/", responderEstado);
   server.on("/estado", responderEstado);

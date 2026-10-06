@@ -80,7 +80,7 @@ ESP32_SERIAL_BAUDIOS = 115200
 ESP32_SERIAL_PREFIJO = "VISION:"
 ESP32_SERIAL_RESPUESTA_SECONDS = 0.5
 # Al abrir el puerto algunas placas se reinician: se le da tiempo a arrancar.
-ESP32_SERIAL_PING_SECONDS = 3.0
+ESP32_SERIAL_PING_SECONDS = 6.0
 ESP32_SERIAL_REBUSCAR_SECONDS = 5.0
 ESP32_SERIAL_VERIFICAR_SECONDS = 5.0
 ESP32_SERIAL_FALLOS_MAX = 3
@@ -431,8 +431,10 @@ class Esp32Serial:
     def _ping(self, puerto):
         limite = time.monotonic() + ESP32_SERIAL_PING_SECONDS
         try:
+            # El buffer se limpia una sola vez: si se limpiara en cada intento,
+            # un PONG que llega tarde (placa arrancando) se perdería.
+            puerto.reset_input_buffer()
             while time.monotonic() < limite:
-                puerto.reset_input_buffer()
                 puerto.write(b"PING\n")
                 fin_intento = time.monotonic() + ESP32_SERIAL_RESPUESTA_SECONDS
                 while time.monotonic() < fin_intento:
