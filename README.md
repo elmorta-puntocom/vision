@@ -124,5 +124,7 @@ python deteccion_tiempo_real.py
 # guardalo junto a deteccion_tiempo_real.py y ejecutalo normalmente.
 # La alarma va por el cable USB del ESP32 (el puerto COM se detecta solo);
 # requiere una vez: pip install pyserial. Cerrá el Monitor Serie del Arduino IDE.
+# El ESP32 encuentra al servidor solo en la red (mDNS), aunque la PC cambie de IP:
+# en la PC que corre Flask hace falta, una vez: pip install zeroconf
 cd C:\Users\juanc\vision\vision
 python deteccion_tiempo_real.py

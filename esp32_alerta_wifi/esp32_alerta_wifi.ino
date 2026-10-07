@@ -79,14 +79,20 @@ WebServer server(80);
 WiFiManager wifiManager;
 Preferences preferencias;
 
-// Campo extra del portal para cargar la URL del servidor Flask.
-char urlServidorPortal[120] = SERVER_BASE_URL_DEFAULT;
+// Campo extra del portal para cargar la URL del servidor Flask. Es opcional: el
+// servidor se encuentra solo por mDNS (descubrirServidor), así que el comprador
+// normalmente lo deja vacío.
+char urlServidorPortal[120] = "";
 WiFiManagerParameter parametroServidor(
-  "server_url", "URL del servidor VISION", urlServidorPortal, sizeof(urlServidorPortal) - 1
+  "server_url", "URL del servidor VISION (opcional: se detecta sola)", urlServidorPortal,
+  sizeof(urlServidorPortal) - 1
 );
 bool guardarParametrosPortal = false;
 
+// Última dirección conocida del servidor: la que se descubrió por mDNS (o la
+// guardada en flash). Si la IP de la PC cambia, se vuelve a descubrir.
 String serverBaseUrl = SERVER_BASE_URL_DEFAULT;
+bool redescubrirServidor = false;
 String hostnameDispositivo;
 volatile bool alarmaActiva = false;
 volatile unsigned long ultimaOrdenAlarma = 0;
@@ -352,9 +358,12 @@ void iniciarWifi(bool forzarPortal) {
   WiFi.setAutoReconnect(true);
   WiFi.setHostname(hostnameDispositivo.c_str());
 
-  strncpy(urlServidorPortal, serverBaseUrl.c_str(), sizeof(urlServidorPortal) - 1);
-  urlServidorPortal[sizeof(urlServidorPortal) - 1] = '\0';
-  parametroServidor.setValue(urlServidorPortal, sizeof(urlServidorPortal) - 1);
+  // El campo opcional del portal solo se rellena si ya hay una URL guardada.
+  if (serverBaseUrl != SERVER_BASE_URL_DEFAULT) {
+    strncpy(urlServidorPortal, serverBaseUrl.c_str(), sizeof(urlServidorPortal) - 1);
+    urlServidorPortal[sizeof(urlServidorPortal) - 1] = '\0';
+    parametroServidor.setValue(urlServidorPortal, sizeof(urlServidorPortal) - 1);
+  }
 
   wifiManager.addParameter(&parametroServidor);
   wifiManager.setSaveConfigCallback(alGuardarPortal);
@@ -395,6 +404,36 @@ void guardarUrlDelPortal() {
   }
 }
 
+// ── Descubrimiento del servidor ─────────────────────────────────────────────
+
+// Busca el servidor VISION en la red local: Flask se anuncia por mDNS como el
+// servicio "_vision._tcp". Así el ESP32 lo encuentra solo aunque el router le
+// cambie la IP a la PC, sin que el comprador configure nada.
+bool descubrirServidor() {
+  int cantidad = MDNS.queryService("vision", "tcp");
+  if (cantidad <= 0) {
+    Serial.println("[mDNS] No se encontró el servidor VISION en la red.");
+    return false;
+  }
+
+  // En el core ESP32 3.x el método se llama address(); IP() ya no existe.
+  IPAddress ip = MDNS.address(0);
+  uint16_t puerto = MDNS.port(0);
+  if (ip == IPAddress(0, 0, 0, 0) || puerto == 0) {
+    Serial.println("[mDNS] El servidor VISION respondió sin dirección válida.");
+    return false;
+  }
+
+  String url = "http://" + ip.toString() + ":" + String(puerto);
+  if (url != serverBaseUrl) {
+    serverBaseUrl = url;
+    // Se guarda por si mDNS no responde en el próximo arranque.
+    preferencias.putString("server_url", serverBaseUrl);
+    Serial.println("[mDNS] Servidor VISION encontrado: " + serverBaseUrl);
+  }
+  return true;
+}
+
 // ── Comunicación con Flask ──────────────────────────────────────────────────
 
 // Devuelve el código HTTP, o un valor negativo si no hubo conexión.
@@ -429,6 +468,8 @@ void registrarRespuestaServidor(int code) {
     return;
   }
   proximoIntentoServidor = millis() + esperaServidorMs;
+  // Puede que la PC haya cambiado de IP: antes del próximo intento se la busca de nuevo.
+  redescubrirServidor = true;
   Serial.printf("[API] Servidor inaccesible; próximo intento en %lu s\n", esperaServidorMs / 1000);
   esperaServidorMs = min(esperaServidorMs * 2, SERVIDOR_REINTENTO_MAX_MS);
 }
@@ -562,6 +603,9 @@ void tareaRed(void* parametro) {
       Serial.print("[WiFi] Conectado. IP del ESP32: ");
       Serial.println(WiFi.localIP());
       iniciarMdns();
+      // Red nueva (casa, auto...): se busca el servidor antes del primer heartbeat.
+      descubrirServidor();
+      redescubrirServidor = false;
       heartbeatPendiente = true;
       proximoIntentoServidor = 0;
       esperaServidorMs = SERVIDOR_REINTENTO_MIN_MS;
@@ -594,6 +638,14 @@ void tareaRed(void* parametro) {
       }
 
       unsigned long now = millis();
+
+      // El servidor no respondió: se lo vuelve a buscar cuando toca el reintento.
+      if (redescubrirServidor
+          && !wifiManager.getConfigPortalActive()
+          && (proximoIntentoServidor == 0 || now >= proximoIntentoServidor)) {
+        redescubrirServidor = false;
+        descubrirServidor();
+      }
 
       // La firma HMAC necesita la hora real. Si NTP no respondió (red sin
       // internet), se pide la hora al servidor VISION.

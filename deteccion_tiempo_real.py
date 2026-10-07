@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from urllib.parse import urlparse
 
 import cv2
 import joblib
@@ -126,11 +128,66 @@ from model.biometrics import calculate_eye_aspect_ratio, estimate_head_pitch # n
 from model.data_collection import normalize_landmarks # noqa: E402
 
 
+def _url_local_equivalente(url):
+    """
+    Si la URL apunta a una IP privada (192.168.x.x, 10.x.x.x...) devuelve la misma
+    URL con 127.0.0.1. Flask corre en esta misma notebook, asi que 127.0.0.1 siempre
+    lo encuentra aunque el router le haya dado otra IP.
+    """
+    partes = urlparse(url)
+    try:
+        ip = ipaddress.ip_address(partes.hostname or "")
+    except ValueError:
+        return None  # nombre de dominio (servidor remoto) o URL invalida
+    if ip.is_loopback or not ip.is_private:
+        return None
+    puerto = f":{partes.port}" if partes.port else ""
+    return f"{partes.scheme}://127.0.0.1{puerto}"
+
+
 @dataclass
 class VisionConfig:
     device_id: str
     api_key: str
     server_url: str
+    # Ultima URL del servidor que respondio: se prueba primero.
+    url_preferida: str | None = None
+
+    def urls_servidor(self):
+        """URLs donde buscar el servidor, la que funciono la ultima vez primero."""
+        urls = [self.server_url]
+        local = _url_local_equivalente(self.server_url)
+        if local:
+            urls.append(local)
+        if self.url_preferida in urls:
+            urls.remove(self.url_preferida)
+            urls.insert(0, self.url_preferida)
+        return urls
+
+
+def pedir_al_servidor(config, metodo, ruta, **kwargs):
+    """
+    Hace la peticion al servidor VISION probando cada URL conocida. Asi sigue
+    funcionando si la IP de la notebook cambio desde que se descargo config.json.
+    Solo salta a la siguiente URL si no hubo conexion; una respuesta HTTP (aunque
+    sea un error) se devuelve tal cual. Si ninguna conecta, relanza el ultimo error.
+    """
+    ultimo_error = None
+    for base in config.urls_servidor():
+        try:
+            respuesta = getattr(requests, metodo)(f"{base}{ruta}", **kwargs)
+        except requests.exceptions.RequestException as exc:
+            ultimo_error = exc
+            continue
+        if config.url_preferida != base:
+            config.url_preferida = base
+            if base != config.server_url:
+                print(
+                    f"[SERVIDOR] La IP guardada en config.json ({config.server_url}) ya no "
+                    f"responde; se usa {base}."
+                )
+        return respuesta
+    raise ultimo_error
 
 
 def cargar_configuracion(path=CONFIG_PATH):
@@ -216,10 +273,11 @@ class Esp32Localizador:
         return None
 
     def _resolver_por_backend(self):
-        url = f"{self.config.server_url}/api/devices/{self.config.device_id}/ip"
         try:
-            respuesta = requests.get(
-                url,
+            respuesta = pedir_al_servidor(
+                self.config,
+                "get",
+                f"/api/devices/{self.config.device_id}/ip",
                 headers={"X-Vision-Api-Key": self.config.api_key},
                 timeout=ESP32_BACKEND_TIMEOUT_SECONDS,
             )
@@ -490,12 +548,14 @@ class Esp32AlarmController:
         Cada 5 s le avisa al servidor si el ESP32 esta respondiendo por el cable.
         Si el servidor no esta disponible no pasa nada: la alarma funciona igual.
         """
-        url = f"{self._config.server_url}/api/devices/{self._config.device_id}/presencia"
+        ruta = f"/api/devices/{self._config.device_id}/presencia"
         aviso_clave = False
         while not self._detener.is_set():
             try:
-                respuesta = requests.post(
-                    url,
+                respuesta = pedir_al_servidor(
+                    self._config,
+                    "post",
+                    ruta,
                     json={"usb": self.usb.conectado},
                     headers={"X-Vision-Api-Key": self._config.api_key},
                     timeout=2.0,
@@ -776,11 +836,15 @@ class DetectionReporter:
         datos = dict(payload)
         datos["api_key"] = self.config.api_key
         datos["device_id"] = self.config.device_id
-        url = f"{self.config.server_url}/api/deteccion"
         try:
-            response = requests.post(url, json=datos, timeout=3.0)
+            response = pedir_al_servidor(
+                self.config, "post", "/api/deteccion", json=datos, timeout=3.0
+            )
         except requests.exceptions.RequestException as exc:
-            print(f"[API] No se pudo registrar deteccion en {url}: {exc.__class__.__name__}")
+            print(
+                "[API] No se pudo registrar deteccion en "
+                f"{self.config.server_url}: {exc.__class__.__name__}"
+            )
             return "reintentar"
 
         if response.status_code in (200, 201):

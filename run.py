@@ -1,6 +1,7 @@
 import os
 
 from app import create_app, db, logger
+from app.discovery import iniciar_anuncio_servidor
 from app.models import verificar_esquema
 from app.services import start_sync_thread
 
@@ -13,6 +14,7 @@ if load_dotenv:
     load_dotenv()
 
 app = create_app()
+PUERTO = 5050
 
 
 def inicializar_mysql():
@@ -34,5 +36,7 @@ if __name__ == '__main__':
 
     if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug:
         start_sync_thread(app)
+        # El ESP32 busca "_vision._tcp" para encontrar el servidor aunque cambie la IP.
+        iniciar_anuncio_servidor(PUERTO)
 
-    app.run(debug=True, host='0.0.0.0', port=5050)
+    app.run(debug=True, host='0.0.0.0', port=PUERTO)
